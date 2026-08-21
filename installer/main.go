@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
@@ -23,7 +22,7 @@ import (
 )
 
 const (
-	launcherVersion = "5.54"
+	launcherVersion = "5.55"
 	releaseAPI      = "https://api.github.com/repos/gyeongseop97/JTSN/releases/latest"
 	appFolderName   = "JTSN"
 	installedName   = "JTSN.exe"
@@ -154,7 +153,7 @@ func ensureInstalled() bool {
 		return false
 	}
 	registerUninstall(want)
-	createDesktopShortcut(want)
+	createDesktopShortcut()
 	cmd := exec.Command(want, "--cleanup-source", self, strconv.Itoa(os.Getpid()))
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	if err := cmd.Start(); err != nil {
@@ -175,20 +174,20 @@ func runInstallWizard(self, want string) bool {
 	comctl32.NewProc("InitCommonControls").Call()
 
 	type wndClassEx struct {
-		Size, Style           uint32
-		WndProc               uintptr
-		ClsExtra, WndExtra    int32
-		Instance, Icon        uintptr
-		Cursor, Background    uintptr
-		MenuName, ClassName   uintptr
-		IconSm                uintptr
+		Size, Style         uint32
+		WndProc             uintptr
+		ClsExtra, WndExtra  int32
+		Instance, Icon      uintptr
+		Cursor, Background  uintptr
+		MenuName, ClassName uintptr
+		IconSm              uintptr
 	}
 	type point struct{ X, Y int32 }
 	type msg struct {
 		HWnd, Message, WParam, LParam uintptr
-		Time                         uint32
-		Pt                           point
-		Private                      uint32
+		Time                          uint32
+		Pt                            point
+		Private                       uint32
 	}
 
 	defWindowProc := user32.NewProc("DefWindowProcW")
@@ -222,7 +221,7 @@ func runInstallWizard(self, want string) bool {
 					}
 					postMessage.Call(installerHWND, wmAppDone, 1, 0)
 				}()
-			return 0
+				return 0
 			}
 			if id == idCancel && !installing {
 				destroyWindow.Call(hwnd)
@@ -251,7 +250,7 @@ func runInstallWizard(self, want string) bool {
 			}
 			return 0
 		case wmClose:
-		if !installing {
+			if !installing {
 				destroyWindow.Call(hwnd)
 			}
 			return 0
@@ -371,11 +370,11 @@ func runHidden(name string, args ...string) error {
 	return cmd.Run()
 }
 
-func psQuote(s string) string { return strings.ReplaceAll(s, "'", "''") }
-
-func createDesktopShortcut(target string) {
-	icon := target + ",0"
-	script := "$d=[Environment]::GetFolderPath('Desktop');Remove-Item -LiteralPath (Join-Path $d '잡툴사니.lnk') -Force -ErrorAction SilentlyContinue;$w=New-Object -ComObject WScript.Shell;$s=$w.CreateShortcut((Join-Path $d 'JTSN.lnk'));$s.TargetPath='" + psQuote(target) + "';$s.WorkingDirectory='" + psQuote(filepath.Dir(target)) + "';$s.IconLocation='" + psQuote(icon) + "';$s.Description='JTSN · 잡툴사니';$s.Save()"
+func createDesktopShortcut() {
+	// Resolve the target from the installing user's environment inside
+	// PowerShell. This prevents a build-machine profile path from leaking into
+	// the desktop shortcut when the installer is packaged elsewhere.
+	script := "$d=[Environment]::GetFolderPath('Desktop');$t=Join-Path $env:LOCALAPPDATA 'Programs\\JTSN\\JTSN.exe';$wd=Split-Path -Parent $t;Remove-Item -LiteralPath (Join-Path $d '잡툴사니.lnk') -Force -ErrorAction SilentlyContinue;$w=New-Object -ComObject WScript.Shell;$s=$w.CreateShortcut((Join-Path $d 'JTSN.lnk'));$s.TargetPath=$t;$s.WorkingDirectory=$wd;$s.IconLocation=$t+',0';$s.Description='JTSN · 잡툴사니';$s.Save()"
 	_ = runHidden("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script)
 }
 
@@ -608,10 +607,6 @@ func launchCore() {
 		message(err.Error(), 0x10)
 		return
 	}
-	// The preserved v5.50 core uses fixed-width version strings. Replacing the
-	// equal-length version token keeps its PE layout intact while making the
-	// installed app and first-run patch-note state follow the launcher version.
-	b = bytes.ReplaceAll(b, []byte("5.50"), []byte(launcherVersion))
 	dir := filepath.Join(installDir(), "core")
 	if os.MkdirAll(dir, 0755) != nil {
 		return
