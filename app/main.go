@@ -127,7 +127,6 @@ const (
 	WM_APP_FAV_REBUILD  = WM_APP + 50
 	WM_APP_BUNDLE_DONE  = WM_APP + 51
 	WM_APP_OCR_DONE     = WM_APP + 52
-	WM_APP_SEARCH       = WM_APP + 53
 	WM_DROPFILES        = 0x0233
 	WM_SETICON          = 0x0080
 	ICON_SMALL          = 0
@@ -158,6 +157,7 @@ const (
 	VK_ESCAPE           = 0x1B
 	VK_DELETE           = 0x2E
 	ID_TIMER_EYEDROPPER = 9101
+	ID_TIMER_SEARCH     = 9102
 
 	MB_OK              = 0x00000000
 	MB_ICONINFORMATION = 0x00000040
@@ -1138,6 +1138,11 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			return 0
 		}
 	case WM_TIMER:
+		if wParam == ID_TIMER_SEARCH && launchMode == "" {
+			procKillTimer.Call(uintptr(hwnd), ID_TIMER_SEARCH)
+			rebuildLauncher(hwnd)
+			return 0
+		}
 		if launchMode == "" && hotkeyTimer(hwnd, wParam) {
 			return 0
 		}
@@ -1197,7 +1202,8 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			switch {
 			case id == ID_LAUNCH_SEARCH && notify == EN_CHANGE && !launcherSearchRebuilding:
 				launcherSearchQuery = strings.TrimSpace(getText(ctl))
-				procPostMessageW.Call(uintptr(hwnd), WM_APP_SEARCH, 0, 0)
+				procKillTimer.Call(uintptr(hwnd), ID_TIMER_SEARCH)
+				procSetTimer.Call(uintptr(hwnd), ID_TIMER_SEARCH, 180, 0)
 			case id >= ID_FAV_REMOVE_BASE+ID_NAV_PRINT && id <= ID_FAV_REMOVE_BASE+ID_NAV_OCR:
 				removeInlineFavorite(id - ID_FAV_REMOVE_BASE)
 			case id >= ID_NAV_PRINT && id <= ID_NAV_OCR:
@@ -1280,11 +1286,6 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 		finishBusy()
 		return 0
 	case WM_APP_FAV_REBUILD:
-		if launchMode == "" {
-			rebuildLauncher(hwnd)
-		}
-		return 0
-	case WM_APP_SEARCH:
 		if launchMode == "" {
 			rebuildLauncher(hwnd)
 		}
