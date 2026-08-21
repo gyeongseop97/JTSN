@@ -27,11 +27,12 @@ jobs:
           actual = hashlib.sha256(core).hexdigest()
           if actual != expected:
               raise SystemExit(f"core checksum mismatch: {actual}")
-          Path("core").mkdir(exist_ok=True)
-          Path("core/JTSN_v5.50.exe").write_bytes(core)
+          Path("installer/core").mkdir(exist_ok=True)
+          Path("installer/core/JTSN_v5.50.exe").write_bytes(core)
           '@ | python -
       - name: Build installer
         shell: pwsh
+        working-directory: installer
         run: |
           go test -buildvcs=false ./...
           go vet -buildvcs=false ./...
@@ -43,8 +44,8 @@ jobs:
         with:
           name: JTSN-v5.53-release
           path: |
-            JTSN_Setup_v5.53.exe
-            JTSN_Setup_v5.53.sha256
-            JTSN_v5.53_source.zip
+            installer/JTSN_Setup_v5.53.exe
+            installer/JTSN_Setup_v5.53.sha256
+            installer/JTSN_v5.53_source.zip
           if-no-files-found: error
           retention-days: 7
