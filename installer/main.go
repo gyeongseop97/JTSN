@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	launcherVersion = "5.58"
+	launcherVersion = "5.59"
 	releaseAPI      = "https://api.github.com/repos/gyeongseop97/JTSN/releases/latest"
 	appFolderName   = "JTSN"
 	installedName   = "JTSN.exe"
@@ -117,7 +117,7 @@ func main() {
 		return
 	}
 	if len(os.Args) >= 3 && os.Args[1] == "--post-update" {
-		_ = os.Remove(os.Args[2])
+		cleanupUpdateBackup(os.Args[2])
 		refreshBranding()
 		os.Args = os.Args[:1]
 	}
@@ -143,6 +143,16 @@ func main() {
 		}
 	}
 	launchCore()
+}
+
+func cleanupUpdateBackup(path string) {
+	for i := 0; i < 30; i++ {
+		err := os.Remove(path)
+		if err == nil || os.IsNotExist(err) {
+			return
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
 }
 
 func installDir() string {
