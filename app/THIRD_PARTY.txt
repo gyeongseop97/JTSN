@@ -13,3 +13,8 @@ PDFium preview engine
 - PDFium: open-source PDF rendering engine (BSD-style license)
 - Binary distribution helper: bblanchon/pdfium-binaries (MIT)
 - Runtime package used by v3.7: Windows x64 PDFium binary distribution
+
+Tesseract OCR 5 and tessdata_best language models
+- Tesseract and language models: Apache License 2.0
+- Windows binary distribution: UB Mannheim build referenced by official Tesseract documentation
+- Used locally for Korean and English screen/image text recognition
