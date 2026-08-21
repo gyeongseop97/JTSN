@@ -33,8 +33,9 @@ const (
 var embeddedCore embed.FS
 
 type asset struct {
-	Name string `json:"name"`
-	URL  string `json:"browser_download_url"`
+	Name   string `json:"name"`
+	URL    string `json:"browser_download_url"`
+	Digest string `json:"digest"`
 }
 
 type release struct {
@@ -43,6 +44,7 @@ type release struct {
 	Assets []asset `json:"assets"`
 	EXE    string  `json:"-"`
 	SUM    string  `json:"-"`
+	HASH   string  `json:"-"`
 }
 
 var client = &http.Client{Timeout: 5 * time.Minute}
@@ -462,12 +464,13 @@ func latest() (release, error) {
 		name := strings.ToLower(a.Name)
 		if strings.HasSuffix(name, ".exe") && strings.Contains(name, "jtsn") {
 			r.EXE = a.URL
+			r.HASH = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(a.Digest)), "sha256:")
 		}
 		if strings.HasSuffix(name, ".sha256") || strings.HasSuffix(name, ".sha256.txt") {
 			r.SUM = a.URL
 		}
 	}
-	if r.EXE == "" || r.SUM == "" {
+	if r.EXE == "" || (r.HASH == "" && r.SUM == "") {
 		return r, fmt.Errorf("릴리스 파일이 없습니다")
 	}
 	return r, nil
@@ -508,15 +511,18 @@ func install(r release) error {
 	if err != nil {
 		return err
 	}
-	sum, err := request(r.SUM, 1<<20)
-	if err != nil {
-		return err
+	want := r.HASH
+	if want == "" {
+		sum, err := request(r.SUM, 1<<20)
+		if err != nil {
+			return err
+		}
+		f := strings.Fields(string(sum))
+		if len(f) == 0 {
+			return fmt.Errorf("체크섬이 없습니다")
+		}
+		want = strings.ToLower(f[0])
 	}
-	f := strings.Fields(string(sum))
-	if len(f) == 0 {
-		return fmt.Errorf("체크섬이 없습니다")
-	}
-	want := strings.ToLower(f[0])
 	gotRaw := sha256.Sum256(exe)
 	got := hex.EncodeToString(gotRaw[:])
 	if len(want) != 64 || want != got {
