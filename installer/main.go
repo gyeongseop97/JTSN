@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
@@ -22,10 +23,12 @@ import (
 )
 
 const (
-	launcherVersion = "5.55"
+	launcherVersion = "5.56"
 	releaseAPI      = "https://api.github.com/repos/gyeongseop97/JTSN/releases/latest"
 	appFolderName   = "JTSN"
 	installedName   = "JTSN.exe"
+	expectedCoreSHA = "b6d971c8d9ffd28ec57f09a00519238fe0f279399c45c566072202a286cc2da5"
+	expectedPatches = 6
 )
 
 //go:embed core/JTSN_v5.50.exe
@@ -607,6 +610,18 @@ func launchCore() {
 		message(err.Error(), 0x10)
 		return
 	}
+	coreHash := sha256.Sum256(b)
+	if hex.EncodeToString(coreHash[:]) != expectedCoreSHA {
+		message("내장 JTSN 본체의 무결성 검증에 실패했습니다.", 0x10)
+		return
+	}
+	oldVersion := []byte("5.50")
+	newVersion := []byte(launcherVersion)
+	if bytes.Count(b, oldVersion) != expectedPatches || len(newVersion) != len(oldVersion) {
+		message("JTSN 본체 버전 정보를 안전하게 갱신할 수 없습니다.", 0x10)
+		return
+	}
+	b = bytes.ReplaceAll(b, oldVersion, newVersion)
 	dir := filepath.Join(installDir(), "core")
 	if os.MkdirAll(dir, 0755) != nil {
 		return
