@@ -701,6 +701,8 @@ var launchOwner RECT
 var launchOwnerValid bool
 var customMaximized bool
 var customRestoreRect RECT
+var customRestoreMini bool
+var customRestoreCompact bool
 var launcherLayoutWidth int32
 var launcherBuilt bool
 var launcherSearchHandle syscall.Handle
@@ -1605,12 +1607,31 @@ func drawChromeGlyph(hdc syscall.Handle, glyph string, rc RECT) {
 func toggleCustomMaximize(hwnd syscall.Handle) {
 	if customMaximized {
 		r := customRestoreRect
-		procSetWindowPos.Call(uintptr(hwnd), 0, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right-r.Left), uintptr(r.Bottom-r.Top), 0)
 		customMaximized = false
+		if launchMode == "" {
+			launcherMini = customRestoreMini
+			launcherCompact = customRestoreCompact
+		}
+		procSetWindowPos.Call(uintptr(hwnd), 0, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right-r.Left), uintptr(r.Bottom-r.Top), 0)
+		if launchMode == "" {
+			rebuildLauncher(hwnd)
+		}
 		procInvalidateRect.Call(uintptr(hwnd), 0, 0)
 		return
 	}
 	procGetWindowRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&customRestoreRect)))
+	if launchMode == "" {
+		customRestoreMini = launcherMini
+		customRestoreCompact = launcherCompact
+		// Mini and compact layouts are fixed-size modes. Maximizing them as-is
+		// leaves their controls stranded in the middle of a large blank canvas.
+		// Use the responsive standard dashboard while maximized, then restore the
+		// user's selected mode with the original window bounds.
+		if launcherMini || launcherCompact {
+			launcherMini = false
+			launcherCompact = false
+		}
+	}
 	monitor, _, _ := procMonitorFromWindow.Call(uintptr(hwnd), 2) // nearest monitor
 	mi := MONITORINFO{CbSize: uint32(unsafe.Sizeof(MONITORINFO{}))}
 	if monitor != 0 {
@@ -1618,6 +1639,9 @@ func toggleCustomMaximize(hwnd syscall.Handle) {
 			r := mi.RcWork
 			customMaximized = true
 			procSetWindowPos.Call(uintptr(hwnd), 0, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right-r.Left), uintptr(r.Bottom-r.Top), 0)
+			if launchMode == "" {
+				rebuildLauncher(hwnd)
+			}
 			return
 		}
 	}
