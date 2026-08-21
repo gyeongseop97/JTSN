@@ -1,0 +1,4 @@
+/outputs/
+/app/build/
+*.tmp
+*.log

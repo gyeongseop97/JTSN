@@ -24,15 +24,14 @@ import (
 )
 
 const (
-	launcherVersion = "5.60"
+	launcherVersion = "5.61"
 	releaseAPI      = "https://api.github.com/repos/gyeongseop97/JTSN/releases/latest"
 	appFolderName   = "JTSN"
 	installedName   = "JTSN.exe"
-	expectedCoreSHA = "b6d971c8d9ffd28ec57f09a00519238fe0f279399c45c566072202a286cc2da5"
-	expectedPatches = 6
+	expectedCoreSHA = "9a7794f1a49b59a2551f4f125ed65b7f0991c19720a395e5b6e6afbc607c4fbe"
 )
 
-//go:embed core/JTSN_v5.50.exe
+//go:embed core/JTSN_v5.61.exe
 var embeddedCore embed.FS
 
 //go:embed assets/JTSN.ico
@@ -926,7 +925,7 @@ func copyFile(src, dst string) error {
 }
 
 func launchCore() {
-	b, err := embeddedCore.ReadFile("core/JTSN_v5.50.exe")
+	b, err := embeddedCore.ReadFile("core/JTSN_v5.61.exe")
 	if err != nil {
 		message(err.Error(), 0x10)
 		return
@@ -936,13 +935,6 @@ func launchCore() {
 		message("내장 JTSN 본체의 무결성 검증에 실패했습니다.", 0x10)
 		return
 	}
-	oldVersion := []byte("5.50")
-	newVersion := []byte(launcherVersion)
-	if bytes.Count(b, oldVersion) != expectedPatches || len(newVersion) != len(oldVersion) {
-		message("JTSN 본체 버전 정보를 안전하게 갱신할 수 없습니다.", 0x10)
-		return
-	}
-	b = bytes.ReplaceAll(b, oldVersion, newVersion)
 	dir := filepath.Join(installDir(), "core")
 	if os.MkdirAll(dir, 0755) != nil {
 		return
