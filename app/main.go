@@ -302,6 +302,7 @@ const (
 
 type POINT struct{ X, Y int32 }
 type RECT struct{ Left, Top, Right, Bottom int32 }
+type MARGINS struct{ Left, Right, Top, Bottom int32 }
 type NMHDR struct {
 	HwndFrom syscall.Handle
 	IDFrom   uintptr
@@ -495,6 +496,7 @@ var (
 	winspool = syscall.NewLazyDLL("winspool.drv")
 	comctl32 = syscall.NewLazyDLL("comctl32.dll")
 	uxtheme  = syscall.NewLazyDLL("uxtheme.dll")
+	dwmapi   = syscall.NewLazyDLL("dwmapi.dll")
 
 	procRegisterClassExW              = user32.NewProc("RegisterClassExW")
 	procCreateWindowExW               = user32.NewProc("CreateWindowExW")
@@ -600,10 +602,12 @@ var (
 	procOleInitialize        = ole32.NewProc("OleInitialize")
 	procOleUninitialize      = ole32.NewProc("OleUninitialize")
 
-	procEnumPrintersW        = winspool.NewProc("EnumPrintersW")
-	procGetDefaultPrinterW   = winspool.NewProc("GetDefaultPrinterW")
-	procInitCommonControlsEx = comctl32.NewProc("InitCommonControlsEx")
-	procSetWindowTheme       = uxtheme.NewProc("SetWindowTheme")
+	procEnumPrintersW         = winspool.NewProc("EnumPrintersW")
+	procGetDefaultPrinterW    = winspool.NewProc("GetDefaultPrinterW")
+	procInitCommonControlsEx  = comctl32.NewProc("InitCommonControlsEx")
+	procSetWindowTheme        = uxtheme.NewProc("SetWindowTheme")
+	procDwmSetWindowAttribute = dwmapi.NewProc("DwmSetWindowAttribute")
+	procDwmExtendFrame        = dwmapi.NewProc("DwmExtendFrameIntoClientArea")
 )
 
 //go:embed jtsn.ico
@@ -844,6 +848,7 @@ func main() {
 		topExStyle = 0
 	}
 	mainHWND = createWindow(topExStyle, "JTSNUtilityWindow", title, windowStyle, x, y, w, h, 0, 0)
+	enableNativeWindowShadow(mainHWND)
 	if appIconBig != 0 {
 		procSendMessageW.Call(uintptr(mainHWND), WM_SETICON, ICON_BIG, uintptr(appIconBig))
 	}
@@ -1630,6 +1635,22 @@ func drawSoftCard(hdc syscall.Handle, rc RECT, radius int, borderColor, fillColo
 	procDeleteObject.Call(pen)
 }
 
+// Frameless popup windows do not consistently receive the normal Windows 11
+// compositor shadow. Enabling non-client rendering and extending a one-pixel
+// glass frame restores the wide native shadow without creating a separate
+// helper window that can leave a ghost behind after close or minimize.
+func enableNativeWindowShadow(hwnd syscall.Handle) {
+	if hwnd == 0 {
+		return
+	}
+	policy := int32(2) // DWMNCRP_ENABLED
+	procDwmSetWindowAttribute.Call(uintptr(hwnd), 2, uintptr(unsafe.Pointer(&policy)), unsafe.Sizeof(policy))
+	corner := int32(2) // DWMWCP_ROUND
+	procDwmSetWindowAttribute.Call(uintptr(hwnd), 33, uintptr(unsafe.Pointer(&corner)), unsafe.Sizeof(corner))
+	margins := MARGINS{Left: 1, Right: 1, Top: 1, Bottom: 1}
+	procDwmExtendFrame.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&margins)))
+}
+
 func drawLauncherBrand(hdc syscall.Handle) {
 	drawLauncherBrandAt(hdc, 67, 18)
 }
@@ -2144,6 +2165,7 @@ func openPatchNotes(latestOnly bool) {
 	if rgn != 0 {
 		procSetWindowRgn.Call(uintptr(patchNotesHWND), rgn, 1)
 	}
+	enableNativeWindowShadow(patchNotesHWND)
 	procShowWindow.Call(uintptr(patchNotesHWND), SW_SHOW)
 	procSetForegroundWindow.Call(uintptr(patchNotesHWND))
 }
@@ -2301,6 +2323,7 @@ func openSettingsWindow() {
 	if rgn != 0 {
 		procSetWindowRgn.Call(uintptr(settingsHWND), rgn, 1)
 	}
+	enableNativeWindowShadow(settingsHWND)
 	procShowWindow.Call(uintptr(settingsHWND), SW_SHOW)
 	procSetForegroundWindow.Call(uintptr(settingsHWND))
 }
