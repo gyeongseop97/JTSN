@@ -70,21 +70,24 @@ const (
 	BS_PUSHBUTTON = 0x00000000
 	BS_OWNERDRAW  = 0x0000000B
 
-	ES_LEFT        = 0x0000
-	ES_MULTILINE   = 0x0004
-	ES_AUTOVSCROLL = 0x0040
-	ES_READONLY    = 0x0800
-	ES_AUTOHSCROLL = 0x0080
-	ES_WANTRETURN  = 0x1000
-	EM_SETMARGINS  = 0x00D3
-	EC_LEFTMARGIN  = 0x0001
-	EC_RIGHTMARGIN = 0x0002
+	ES_LEFT         = 0x0000
+	ES_MULTILINE    = 0x0004
+	ES_AUTOVSCROLL  = 0x0040
+	ES_READONLY     = 0x0800
+	ES_AUTOHSCROLL  = 0x0080
+	ES_WANTRETURN   = 0x1000
+	EM_SETMARGINS   = 0x00D3
+	EM_SETSEL       = 0x00B1
+	EM_SETCUEBANNER = 0x1501
+	EC_LEFTMARGIN   = 0x0001
+	EC_RIGHTMARGIN  = 0x0002
 
 	CBS_DROPDOWNLIST = 0x0003
 	CBN_SETFOCUS     = 3
 	CBN_KILLFOCUS    = 4
 	EN_SETFOCUS      = 0x0100
 	EN_KILLFOCUS     = 0x0200
+	EN_CHANGE        = 0x0300
 
 	WM_CREATE           = 0x0001
 	WM_DESTROY          = 0x0002
@@ -109,6 +112,7 @@ const (
 	WM_APP_TASKDONE     = WM_APP + 6
 	WM_APP_ERROR        = WM_APP + 7
 	WM_APP_DUPDELETED   = WM_APP + 8
+	WM_APP_SEARCH       = WM_APP + 9
 	WM_DROPFILES        = 0x0233
 	WM_SETICON          = 0x0080
 	ICON_SMALL          = 0
@@ -191,6 +195,7 @@ const (
 	ID_SIDE_INFO      = 621
 	ID_LAUNCH_EDIT    = 630
 	ID_RECENT_CLEAR   = 631
+	ID_LAUNCH_SEARCH  = 632
 
 	ID_BTN_ADD        = 201
 	ID_BTN_CLEAR      = 202
@@ -500,6 +505,9 @@ var launcherControls []syscall.Handle
 var launcherCategory = ID_SIDE_FAVORITES
 var launcherRecent []int
 var launcherRecentLoaded bool
+var launcherSearchHandle syscall.Handle
+var launcherSearchQuery string
+var launcherRebuilding bool
 var sidebarControls = map[syscall.Handle]bool{}
 var panelControls = map[syscall.Handle]bool{}
 var headerControls = map[syscall.Handle]bool{}
@@ -823,6 +831,11 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			}
 		}
 		if launchMode == "" {
+			if id == ID_LAUNCH_SEARCH && notify == EN_CHANGE && !launcherRebuilding {
+				launcherSearchQuery = getText(ctl)
+				procPostMessageW.Call(uintptr(hwnd), WM_APP_SEARCH, 0, 0)
+				return 0
+			}
 			switch {
 			case id >= ID_NAV_PRINT && id <= ID_NAV_TEXT:
 				launchTool(id)
@@ -844,6 +857,11 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			pdfHandleCommand(id, notify)
 		} else {
 			handleAction(id)
+		}
+		return 0
+	case WM_APP_SEARCH:
+		if launchMode == "" {
+			rebuildLauncher(hwnd)
 		}
 		return 0
 	case WM_DROPFILES:
@@ -1146,11 +1164,14 @@ func clearLauncherControls() {
 		procDestroyWindow.Call(uintptr(h))
 	}
 	launcherControls = nil
+	launcherSearchHandle = 0
 }
 
 func rebuildLauncher(hwnd syscall.Handle) {
+	launcherRebuilding = true
 	clearLauncherControls()
 	buildLauncher(hwnd)
+	launcherRebuilding = false
 	procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 }
 
@@ -1172,6 +1193,15 @@ func launcherCategoryTitle() string {
 }
 
 func launcherToolsForCategory() []int {
+	if q := strings.TrimSpace(strings.ToLower(launcherSearchQuery)); q != "" {
+		var matches []int
+		for _, id := range []int{ID_NAV_PDF, ID_NAV_PRINT, ID_NAV_RENAME, ID_NAV_FOLDERS, ID_NAV_DUP, ID_NAV_IMAGE, ID_NAV_COLOR, ID_NAV_TEXT} {
+			if strings.Contains(strings.ToLower(toolSearchText(id)), q) {
+				matches = append(matches, id)
+			}
+		}
+		return matches
+	}
 	switch launcherCategory {
 	case ID_SIDE_PDF:
 		return []int{ID_NAV_PDF}
@@ -1186,6 +1216,20 @@ func launcherToolsForCategory() []int {
 	default:
 		return []int{ID_NAV_PDF, ID_NAV_PRINT, ID_NAV_RENAME, ID_NAV_FOLDERS, ID_NAV_DUP, ID_NAV_IMAGE, ID_NAV_COLOR, ID_NAV_TEXT}
 	}
+}
+
+func toolSearchText(id int) string {
+	aliases := map[int]string{
+		ID_NAV_PRINT:   "인쇄 프린트 출력 문서 파일",
+		ID_NAV_PDF:     "pdf 병합 분할 추출 변환 문서",
+		ID_NAV_RENAME:  "파일명 이름 변경 일괄 이름바꾸기",
+		ID_NAV_FOLDERS: "폴더 생성 새폴더 일괄",
+		ID_NAV_DUP:     "중복 파일 찾기 검사 삭제",
+		ID_NAV_IMAGE:   "이미지 사진 변환 png jpg jpeg bmp webp",
+		ID_NAV_COLOR:   "색상 컬러 스포이드 rgb hex 코드",
+		ID_NAV_TEXT:    "텍스트 글자 정리 공백 줄바꿈",
+	}
+	return toolName(id) + " " + aliases[id]
 }
 
 func launcherRecentPath() string {
@@ -1267,8 +1311,21 @@ func buildLauncher(hwnd syscall.Handle) {
 
 	// Main workspace heading.
 	section := "☆  " + launcherCategoryTitle()
-	launcherLabel(hwnd, section, 282, 28, 360, 34, fontLauncherTitle, false, false)
-	if launcherCategory == ID_SIDE_FAVORITES {
+	if strings.TrimSpace(launcherSearchQuery) != "" {
+		section = "⌕  검색 결과"
+	}
+	launcherLabel(hwnd, section, 282, 28, 300, 34, fontLauncherTitle, false, false)
+	launcherSearchHandle = createWindow(0, "EDIT", launcherSearchQuery, WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_BORDER|ES_LEFT|ES_AUTOHSCROLL, 700, 25, 314, 36, hwnd, ID_LAUNCH_SEARCH)
+	launcherControls = append(launcherControls, launcherSearchHandle)
+	panelControls[launcherSearchHandle] = true
+	sendFont(launcherSearchHandle, fontNormal)
+	procSendMessageW.Call(uintptr(launcherSearchHandle), EM_SETMARGINS, EC_LEFTMARGIN|EC_RIGHTMARGIN, uintptr(10|(10<<16)))
+	procSendMessageW.Call(uintptr(launcherSearchHandle), EM_SETCUEBANNER, 1, uintptr(unsafe.Pointer(p16("기능 검색..."))))
+	if launcherSearchQuery != "" {
+		procSendMessageW.Call(uintptr(launcherSearchHandle), EM_SETSEL, ^uintptr(0), ^uintptr(0))
+		user32.NewProc("SetFocus").Call(uintptr(launcherSearchHandle))
+	}
+	if launcherCategory == ID_SIDE_FAVORITES && strings.TrimSpace(launcherSearchQuery) == "" {
 		launcherButton(hwnd, "편집", 1026, 24, 86, 38, ID_LAUNCH_EDIT, BTN_LAUNCH_GHOST)
 	}
 
@@ -1284,7 +1341,11 @@ func buildLauncher(hwnd syscall.Handle) {
 		launcherButton(hwnd, toolName(id), x, y, cardW, cardH, id, BTN_LAUNCH_CARD)
 	}
 	if len(tools) == 0 {
-		launcherLabel(hwnd, "표시할 도구가 없습니다.", 282, 110, 420, 28, fontNormal, true, false)
+		message := "표시할 도구가 없습니다."
+		if strings.TrimSpace(launcherSearchQuery) != "" {
+			message = "검색 결과가 없습니다. 다른 이름이나 키워드로 찾아보세요."
+		}
+		launcherLabel(hwnd, message, 282, 110, 560, 28, fontNormal, true, false)
 	}
 
 	// Recent-use section remains in a fixed tray so the dashboard does not jump
