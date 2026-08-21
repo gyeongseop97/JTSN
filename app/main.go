@@ -100,6 +100,7 @@ const (
 	WM_SETCURSOR        = 0x0020
 	WM_CAPTURECHANGED   = 0x0215
 	WM_TIMER            = 0x0113
+	WM_HOTKEY           = 0x0312
 	WM_MOUSELEAVE       = 0x02A3
 	WM_CTLCOLORSTATIC   = 0x0138
 	WM_CTLCOLOREDIT     = 0x0133
@@ -123,8 +124,14 @@ const (
 	LR_CREATEDIBSECTION = 0x00002000
 	DI_NORMAL           = 0x0003
 
-	SW_HIDE = 0
-	SW_SHOW = 5
+	SW_HIDE    = 0
+	SW_SHOW    = 5
+	SW_RESTORE = 9
+
+	MOD_ALT     = 0x0001
+	MOD_CONTROL = 0x0002
+	MOD_SHIFT   = 0x0004
+	HOTKEY_ID   = 0x4A54
 
 	VK_LBUTTON          = 0x01
 	ID_TIMER_EYEDROPPER = 9101
@@ -443,6 +450,10 @@ var (
 	procDestroyMenu          = user32.NewProc("DestroyMenu")
 	procLoadImageW           = user32.NewProc("LoadImageW")
 	procDrawIconEx           = user32.NewProc("DrawIconEx")
+	procFindWindowW          = user32.NewProc("FindWindowW")
+	procSetForegroundWindow  = user32.NewProc("SetForegroundWindow")
+	procRegisterHotKey       = user32.NewProc("RegisterHotKey")
+	procUnregisterHotKey     = user32.NewProc("UnregisterHotKey")
 
 	procCreateFontW            = gdi32.NewProc("CreateFontW")
 	procGetPixel               = gdi32.NewProc("GetPixel")
@@ -466,6 +477,8 @@ var (
 	procGetStockObject         = gdi32.NewProc("GetStockObject")
 
 	procGetModuleHandleW = kernel32.NewProc("GetModuleHandleW")
+	procCreateMutexW     = kernel32.NewProc("CreateMutexW")
+	procCloseHandle      = kernel32.NewProc("CloseHandle")
 	procGlobalAlloc      = kernel32.NewProc("GlobalAlloc")
 	procGlobalLock       = kernel32.NewProc("GlobalLock")
 	procGlobalUnlock     = kernel32.NewProc("GlobalUnlock")
@@ -510,6 +523,8 @@ var launcherSearchQuery string
 var launcherRebuilding bool
 var startupFiles []string
 var startupFolder string
+var launcherMutex syscall.Handle
+var launcherHotkeyRegistered bool
 var sidebarControls = map[syscall.Handle]bool{}
 var panelControls = map[syscall.Handle]bool{}
 var headerControls = map[syscall.Handle]bool{}
@@ -591,6 +606,10 @@ func main() {
 	// "Not responding" states while background goroutines are active.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+	if launchMode == "" && !ensureSingleLauncherInstance() {
+		return
+	}
+	defer releaseSingleLauncherInstance()
 	if launchMode != "" {
 		currentTool = toolIDFromMode(launchMode)
 	}
@@ -639,6 +658,9 @@ func main() {
 	}
 	procShowWindow.Call(uintptr(mainHWND), SW_SHOW)
 	procUpdateWindow.Call(uintptr(mainHWND))
+	if launchMode == "" {
+		launcherHotkeyRegistered = registerLauncherHotkey(mainHWND)
+	}
 
 	var msg MSG
 	for {
@@ -828,6 +850,12 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			}
 			return 0
 		}
+	case WM_HOTKEY:
+		if launchMode == "" && wParam == HOTKEY_ID {
+			procShowWindow.Call(uintptr(hwnd), SW_RESTORE)
+			procSetForegroundWindow.Call(uintptr(hwnd))
+			return 0
+		}
 	case WM_COMMAND:
 		id := int(wParam & 0xffff)
 		notify := int((wParam >> 16) & 0xffff)
@@ -964,6 +992,10 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 		procDestroyWindow.Call(uintptr(hwnd))
 		return 0
 	case WM_DESTROY:
+		if launcherHotkeyRegistered {
+			procUnregisterHotKey.Call(uintptr(hwnd), HOTKEY_ID)
+			launcherHotkeyRegistered = false
+		}
 		if eyedropperDragging {
 			finishEyedropperDrag(false)
 		}
@@ -977,6 +1009,34 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 	}
 	ret, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(msg), wParam, lParam)
 	return ret
+}
+
+func ensureSingleLauncherInstance() bool {
+	h, _, callErr := procCreateMutexW.Call(0, 0, uintptr(unsafe.Pointer(p16(`Local\JTSNUtilityLauncher`))))
+	launcherMutex = syscall.Handle(h)
+	if callErr == syscall.Errno(183) {
+		existing, _, _ := procFindWindowW.Call(uintptr(unsafe.Pointer(p16("JTSNUtilityWindow"))), 0)
+		if existing != 0 {
+			procShowWindow.Call(existing, SW_RESTORE)
+			procSetForegroundWindow.Call(existing)
+		}
+		return false
+	}
+	return h != 0
+}
+
+func releaseSingleLauncherInstance() {
+	if launcherMutex != 0 {
+		procCloseHandle.Call(uintptr(launcherMutex))
+		launcherMutex = 0
+	}
+}
+
+func registerLauncherHotkey(hwnd syscall.Handle) bool {
+	// v5.60의 기본 호출키를 먼저 복원합니다. 설정 UI에서 변경하는 기능은
+	// 다음 복원 단계에서 이 등록 함수를 재사용합니다.
+	r, _, _ := procRegisterHotKey.Call(uintptr(hwnd), HOTKEY_ID, MOD_CONTROL|MOD_SHIFT, uintptr('J'))
+	return r != 0
 }
 
 func initFonts() {
