@@ -187,6 +187,7 @@ const (
 	DT_LEFT          = 0x0000
 	DT_CENTER        = 0x0001
 	DT_VCENTER       = 0x0004
+	DT_WORDBREAK     = 0x0010
 	DT_SINGLELINE    = 0x0020
 	DT_END_ELLIPSIS  = 0x8000
 	PS_SOLID         = 0
@@ -1386,16 +1387,20 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 func initFonts() {
 	fontNormal = createFont(-17, 400, "Noto Sans KR")
 	fontSmall = createFont(-14, 400, "Noto Sans KR")
-	fontButton = createFont(-16, 600, "Noto Sans KR")
-	fontTitle = createFont(-28, 700, "Noto Sans KR")
-	fontApp = createFont(-22, 700, "Noto Sans KR")
-	fontLauncherTitle = createFont(-25, 700, "Noto Sans KR")
-	fontLauncherSection = createFont(-19, 700, "Noto Sans KR")
-	fontLauncherCard = createFont(-17, 600, "Noto Sans KR")
-	fontLauncherSide = createFont(-16, 500, "Noto Sans KR")
+	fontButton = createFont(-16, 500, "Noto Sans KR")
+	fontTitle = createFont(-28, 600, "Noto Sans KR")
+	fontApp = createFont(-22, 600, "Noto Sans KR")
+	fontLauncherTitle = createFont(-25, 600, "Noto Sans KR")
+	fontLauncherSection = createFont(-19, 600, "Noto Sans KR")
+	fontLauncherCard = createFont(-17, 500, "Noto Sans KR")
+	fontLauncherSide = createFont(-16, 450, "Noto Sans KR")
 }
 func createFont(height int32, weight uintptr, face string) syscall.Handle {
-	h, _, _ := procCreateFontW.Call(uintptr(height), 0, 0, 0, weight, 0, 0, 0, 1, 0, 0, 6, 0, uintptr(unsafe.Pointer(p16(face))))
+	// Force the embedded TrueType face and natural ClearType rasterization.
+	// Leaving output precision at the GDI default can select a synthesized
+	// bitmap strike at some DPI values, which makes medium/bold Korean glyphs
+	// look jagged or clogged.
+	h, _, _ := procCreateFontW.Call(uintptr(height), 0, 0, 0, weight, 0, 0, 0, 1, 4, 0, 6, 0, uintptr(unsafe.Pointer(p16(face))))
 	return syscall.Handle(h)
 }
 func solidBrush(r, g, b byte) syscall.Handle {
@@ -2370,9 +2375,9 @@ func settingsWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) ui
 		installHotkeyCapture(settingsHotkeyEdit)
 		settingsControls = append(settingsControls,
 			createOwnerButton(hwnd, "×", 516, 10, 32, 30, ID_SETTINGS_CLOSE, BTN_LAUNCH_GHOST),
-			createOwnerButton(hwnd, "기본형", 154, 126, 118, 120, ID_SETTINGS_STANDARD, BTN_SETTING_OPTION),
-			createOwnerButton(hwnd, "미니형", 282, 126, 118, 120, ID_SETTINGS_MINI, BTN_SETTING_OPTION),
-			createOwnerButton(hwnd, "컴팩트형", 410, 126, 118, 120, ID_SETTINGS_COMPACT, BTN_SETTING_OPTION),
+			createOwnerButton(hwnd, "기본형", 148, 126, 124, 120, ID_SETTINGS_STANDARD, BTN_SETTING_OPTION),
+			createOwnerButton(hwnd, "미니형", 280, 126, 124, 120, ID_SETTINGS_MINI, BTN_SETTING_OPTION),
+			createOwnerButton(hwnd, "컴팩트형", 412, 126, 124, 120, ID_SETTINGS_COMPACT, BTN_SETTING_OPTION),
 			settingsHotkeyEdit,
 			createOwnerButton(hwnd, "고급 클립보드 설정", 154, 390, 374, 52, ID_SETTINGS_CLIP, BTN_SECONDARY),
 			createOwnerButton(hwnd, "완료", 414, 474, 110, 40, ID_SETTINGS_APPLY, BTN_PRIMARY),
@@ -4389,20 +4394,20 @@ func drawSettingsOption(dis *DRAWITEMSTRUCT) {
 	rc.Bottom = rc.Top + 30
 	procDrawTextW.Call(uintptr(dis.HDC), uintptr(unsafe.Pointer(p16(title))), uintptr(len(syscall.StringToUTF16(title))-1), uintptr(unsafe.Pointer(&rc)), DT_LEFT|DT_VCENTER|DT_SINGLELINE)
 	procSelectObject.Call(uintptr(dis.HDC), oldF)
-	sub := "넓은 카드형 대시보드"
+	sub := "넓은 카드 화면"
 	if id == ID_SETTINGS_MINI {
-		sub = "길고 얇은 빠른 목록"
+		sub = "세로형 빠른 목록"
 	} else if id == ID_SETTINGS_COMPACT {
-		sub = "좁은 레일 + 도구 그리드"
+		sub = "레일형 도구 화면"
 	}
 	procSetTextColor.Call(uintptr(dis.HDC), rgb(100, 116, 139))
 	oldS, _, _ := procSelectObject.Call(uintptr(dis.HDC), uintptr(fontSmall))
 	sr := dis.RcItem
-	sr.Left += 18
-	sr.Right -= 12
-	sr.Top += 55
-	sr.Bottom -= 12
-	procDrawTextW.Call(uintptr(dis.HDC), uintptr(unsafe.Pointer(p16(sub))), uintptr(len(syscall.StringToUTF16(sub))-1), uintptr(unsafe.Pointer(&sr)), DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+	sr.Left += 10
+	sr.Right -= 10
+	sr.Top += 52
+	sr.Bottom -= 8
+	procDrawTextW.Call(uintptr(dis.HDC), uintptr(unsafe.Pointer(p16(sub))), uintptr(len(syscall.StringToUTF16(sub))-1), uintptr(unsafe.Pointer(&sr)), DT_CENTER|DT_VCENTER|DT_WORDBREAK)
 	procSelectObject.Call(uintptr(dis.HDC), oldS)
 }
 
