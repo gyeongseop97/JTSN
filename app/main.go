@@ -231,6 +231,7 @@ const (
 	ID_LAUNCH_ADD           = 632
 	ID_LAUNCH_CANCEL        = 633
 	ID_LAUNCH_SEARCH        = 634
+	ID_LAUNCH_SEARCH_FRAME  = 635
 	ID_FAV_REMOVE_BASE      = 6700
 	ID_RECENT_CLEAR         = 631
 	ID_SETTINGS_STANDARD    = 640
@@ -1198,6 +1199,8 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			case id == ID_LAUNCH_SEARCH && notify == EN_CHANGE && !launcherSearchRebuilding:
 				launcherSearchQuery = strings.TrimSpace(getText(ctl))
 				procPostMessageW.Call(uintptr(hwnd), WM_APP_SEARCH, 0, 0)
+			case id == ID_LAUNCH_SEARCH_FRAME && launcherSearchHandle != 0:
+				procSetFocus.Call(uintptr(launcherSearchHandle))
 			case id >= ID_FAV_REMOVE_BASE+ID_NAV_PRINT && id <= ID_FAV_REMOVE_BASE+ID_NAV_OCR:
 				removeInlineFavorite(id - ID_FAV_REMOVE_BASE)
 			case id >= ID_NAV_PRINT && id <= ID_NAV_OCR:
@@ -1287,10 +1290,6 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 	case WM_APP_SEARCH:
 		if launchMode == "" {
 			rebuildLauncher(hwnd)
-			if launcherSearchHandle != 0 {
-				procSetFocus.Call(uintptr(launcherSearchHandle))
-				procSendMessageW.Call(uintptr(launcherSearchHandle), EM_SETSEL, ^uintptr(0), ^uintptr(0))
-			}
 		}
 		return 0
 	case WM_APP_BUNDLE_DONE:
@@ -1815,7 +1814,6 @@ func launcherButton(parent syscall.Handle, text string, x, y, w, h, id, kind int
 }
 
 func clearLauncherControls() {
-	launcherSearchHandle = 0
 	for _, h := range launcherControls {
 		delete(sidebarControls, h)
 		delete(panelControls, h)
@@ -2556,10 +2554,16 @@ func buildLauncher(hwnd syscall.Handle) {
 	loadLauncherRecent()
 	resetInlineFavoriteCards()
 	if launcherCompact {
+		if launcherSearchHandle != 0 {
+			procShowWindow.Call(uintptr(launcherSearchHandle), SW_HIDE)
+		}
 		buildCompactLauncher(hwnd)
 		return
 	}
 	if launcherMini {
+		if launcherSearchHandle != 0 {
+			procShowWindow.Call(uintptr(launcherSearchHandle), SW_HIDE)
+		}
 		buildMiniLauncher(hwnd)
 		return
 	}
@@ -2610,12 +2614,19 @@ func buildLauncher(hwnd syscall.Handle) {
 	}
 	launcherLabel(hwnd, section, startX, 28, 360, 34, fontLauncherTitle, false, false)
 	if !launcherFavoriteEditing {
-		launcherSearchRebuilding = true
-		launcherSearchHandle = createWindow(0, "EDIT", launcherSearchQuery, WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_BORDER|ES_AUTOHSCROLL, contentRight-324, 25, 220, 36, hwnd, ID_LAUNCH_SEARCH)
-		launcherControls = append(launcherControls, launcherSearchHandle)
-		sendFont(launcherSearchHandle, fontNormal)
-		procSendMessageW.Call(uintptr(launcherSearchHandle), EM_SETMARGINS, EC_LEFTMARGIN|EC_RIGHTMARGIN, uintptr(12|(12<<16)))
-		launcherSearchRebuilding = false
+		launcherButton(hwnd, "", contentRight-330, 23, 232, 40, ID_LAUNCH_SEARCH_FRAME, BTN_SECONDARY)
+		if launcherSearchHandle == 0 {
+			launcherSearchRebuilding = true
+			launcherSearchHandle = createWindow(0, "EDIT", launcherSearchQuery, WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_AUTOHSCROLL, contentRight-318, 27, 208, 32, hwnd, ID_LAUNCH_SEARCH)
+			sendFont(launcherSearchHandle, fontNormal)
+			procSendMessageW.Call(uintptr(launcherSearchHandle), EM_SETMARGINS, EC_LEFTMARGIN|EC_RIGHTMARGIN, uintptr(12|(12<<16)))
+			launcherSearchRebuilding = false
+		} else {
+			procSetWindowPos.Call(uintptr(launcherSearchHandle), 0, uintptr(contentRight-318), 27, 208, 32, 0)
+			procShowWindow.Call(uintptr(launcherSearchHandle), SW_SHOW)
+		}
+	} else if launcherSearchHandle != 0 {
+		procShowWindow.Call(uintptr(launcherSearchHandle), SW_HIDE)
 	}
 	if launcherCategory == ID_SIDE_FAVORITES && launcherSearchQuery == "" {
 		editText := "편집"
