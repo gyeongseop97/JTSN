@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	launcherVersion = "5.59"
+	launcherVersion = "5.60"
 	releaseAPI      = "https://api.github.com/repos/gyeongseop97/JTSN/releases/latest"
 	appFolderName   = "JTSN"
 	installedName   = "JTSN.exe"
@@ -56,18 +56,22 @@ type release struct {
 var client = &http.Client{Timeout: 5 * time.Minute}
 
 const (
-	wmDestroy     = 0x0002
-	wmCommand     = 0x0111
-	wmClose       = 0x0010
-	wmSetFont     = 0x0030
-	wmAppProgress = 0x8001
-	wmAppDone     = 0x8002
-	wmUpdateStep  = 0x8003
-	wmUpdateDone  = 0x8004
-	pbmSetRange32 = 0x0406
-	pbmSetPos     = 0x0402
-	idInstall     = 1001
-	idCancel      = 1002
+	wmDestroy        = 0x0002
+	wmCommand        = 0x0111
+	wmClose          = 0x0010
+	wmSetFont        = 0x0030
+	wmCtlColorEdit   = 0x0133
+	wmCtlColorStatic = 0x0138
+	wmAppProgress    = 0x8001
+	wmAppDone        = 0x8002
+	wmUpdateStep     = 0x8003
+	wmUpdateDone     = 0x8004
+	pbmSetRange32    = 0x0406
+	pbmSetPos        = 0x0402
+	pbmSetBarColor   = 0x0409
+	pbmSetBkColor    = 0x2001
+	idInstall        = 1001
+	idCancel         = 1002
 )
 
 var (
@@ -96,6 +100,23 @@ func message(text string, flags uintptr) uintptr {
 	u := syscall.NewLazyDLL("user32.dll")
 	r, _, _ := u.NewProc("MessageBoxW").Call(0, uintptr(unsafe.Pointer(p16(text))), uintptr(unsafe.Pointer(p16("JTSN · 잡툴사니 업데이트"))), flags)
 	return r
+}
+
+func askUpdate(title, content string) bool {
+	comctl32 := syscall.NewLazyDLL("comctl32.dll")
+	button := int32(0)
+	hr, _, _ := comctl32.NewProc("TaskDialog").Call(
+		0, 0,
+		uintptr(unsafe.Pointer(p16("JTSN · 잡툴사니"))),
+		uintptr(unsafe.Pointer(p16(title))),
+		uintptr(unsafe.Pointer(p16(content))),
+		0x0002|0x0004, 0,
+		uintptr(unsafe.Pointer(&button)),
+	)
+	if int32(hr) < 0 {
+		return message(title+"\n\n"+content, 0x00000004|0x00000020) == 6
+	}
+	return button == 6
 }
 
 func main() {
@@ -134,7 +155,7 @@ func main() {
 			prompt += "\n\n" + body
 		}
 		prompt += "\n\n지금 업데이트할까요?"
-		if message(prompt, 0x00000004|0x00000020) == 6 {
+		if askUpdate(fmt.Sprintf("JTSN %s 업데이트", rel.Tag), strings.TrimPrefix(prompt, fmt.Sprintf("새 버전 %s을 사용할 수 있습니다.\n", rel.Tag))) {
 			if err := runUpdateProgress(rel); err == nil {
 				return
 			} else {
@@ -223,9 +244,42 @@ func runInstallWizard(self, want string) bool {
 	enableWindow := user32.NewProc("EnableWindow")
 	sendMessage := user32.NewProc("SendMessageW")
 	postMessage := user32.NewProc("PostMessageW")
+	createBrush := gdi32.NewProc("CreateSolidBrush")
+	brandBrush, _, _ := createBrush.Call(0x00EF6F2E)
+	headerBrush, _, _ := createBrush.Call(0x00FCFAF8)
+	whiteBrush, _, _ := createBrush.Call(0x00FFFFFF)
+	surfaceBrush, _, _ := createBrush.Call(0x00FAF7F4)
+	setTextColor := gdi32.NewProc("SetTextColor")
+	setBkColor := gdi32.NewProc("SetBkColor")
+	var headerBand, headerTitle, headerSub, accentBar, logoText uintptr
 
 	wndProc := syscall.NewCallback(func(hwnd uintptr, m uint32, wp, lp uintptr) uintptr {
 		switch m {
+		case wmCtlColorStatic:
+			if lp == accentBar {
+				setBkColor.Call(wp, 0x00EF6F2E)
+				return brandBrush
+			}
+			if lp == headerBand || lp == headerTitle || lp == logoText {
+				setTextColor.Call(wp, 0x0037291F)
+				setBkColor.Call(wp, 0x00FCFAF8)
+				if lp == logoText {
+					setTextColor.Call(wp, 0x00EF6F2E)
+				}
+				return headerBrush
+			}
+			if lp == headerSub {
+				setTextColor.Call(wp, 0x008B7464)
+				setBkColor.Call(wp, 0x00FCFAF8)
+				return headerBrush
+			}
+			setTextColor.Call(wp, 0x00352A20)
+			setBkColor.Call(wp, 0x00FFFFFF)
+			return whiteBrush
+		case wmCtlColorEdit:
+			setTextColor.Call(wp, 0x00443A32)
+			setBkColor.Call(wp, 0x00FAF7F4)
+			return surfaceBrush
 		case wmCommand:
 			id := int(wp & 0xffff)
 			if id == idInstall && installDone {
@@ -295,7 +349,7 @@ func runInstallWizard(self, want string) bool {
 
 	create := user32.NewProc("CreateWindowExW")
 	installerHWND, _, _ = create.Call(0, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(p16("JTSN 설치"))), 0x00CA0000,
-		uintptr(0x80000000), uintptr(0x80000000), 570, 330, 0, 0, hInstance, 0)
+		uintptr(0x80000000), uintptr(0x80000000), 640, 410, 0, 0, hInstance, 0)
 	if installerHWND == 0 {
 		if message("JTSN을 다음 위치에 설치합니다.\n\n"+filepath.Dir(want)+"\n\n설치하시겠습니까?", 0x24) != 6 {
 			return false
@@ -306,22 +360,32 @@ func runInstallWizard(self, want string) bool {
 		return copyFile(self, want) == nil
 	}
 
-	font, _, _ := gdi32.NewProc("CreateFontW").Call(^uintptr(17-1), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, uintptr(unsafe.Pointer(p16("Segoe UI"))))
-	add := func(class, text string, style uintptr, x, y, w, h int, id uintptr) uintptr {
+	makeFont := func(height int, weight int) uintptr {
+		font, _, _ := gdi32.NewProc("CreateFontW").Call(^uintptr(height-1), 0, 0, 0, uintptr(weight), 0, 0, 0, 1, 0, 0, 5, 0, uintptr(unsafe.Pointer(p16("Segoe UI"))))
+		return font
+	}
+	bodyFont, titleFont, subFont, buttonFont, logoFont := makeFont(17, 400), makeFont(26, 700), makeFont(15, 400), makeFont(16, 600), makeFont(24, 800)
+	add := func(class, text string, style uintptr, x, y, w, h int, id, font uintptr) uintptr {
 		child, _, _ := create.Call(0, uintptr(unsafe.Pointer(p16(class))), uintptr(unsafe.Pointer(p16(text))), style|0x40000000|0x10000000,
 			uintptr(x), uintptr(y), uintptr(w), uintptr(h), installerHWND, id, hInstance, 0)
 		sendMessage.Call(child, wmSetFont, font, 1)
 		return child
 	}
-	add("STATIC", "JTSN · 잡툴사니 설치", 0, 32, 25, 480, 32, 0)
-	add("STATIC", "프로그램을 사용자 전용 폴더에 설치합니다.", 0, 32, 65, 480, 22, 0)
-	add("STATIC", "설치 위치", 0, 32, 105, 90, 22, 0)
-	add("EDIT", filepath.Dir(want), 0x00800800, 32, 130, 495, 30, 0)
-	progressHWND = add("msctls_progress32", "", 0, 32, 183, 495, 18, 0)
+	headerBand = add("STATIC", "", 0, 0, 0, 640, 108, 0, bodyFont)
+	accentBar = add("STATIC", "", 0, 0, 0, 8, 108, 0, bodyFont)
+	logoText = add("STATIC", "JT·SN", 0, 34, 31, 82, 34, 0, logoFont)
+	headerTitle = add("STATIC", "JTSN 설치", 0, 126, 24, 450, 36, 0, titleFont)
+	headerSub = add("STATIC", "잡툴사니를 빠르고 안전하게 준비합니다", 0, 127, 66, 450, 24, 0, subFont)
+	add("STATIC", "설치 위치", 0, 38, 132, 120, 24, 0, bodyFont)
+	add("EDIT", filepath.Dir(want), 0x00800800, 38, 160, 552, 34, 0, subFont)
+	add("STATIC", "설치 진행 상태", 0, 38, 218, 180, 24, 0, bodyFont)
+	progressHWND = add("msctls_progress32", "", 0, 38, 248, 552, 14, 0, bodyFont)
 	sendMessage.Call(progressHWND, pbmSetRange32, 0, 100)
-	statusHWND = add("STATIC", "설치 준비가 완료되었습니다.", 0, 32, 210, 495, 24, 0)
-	installBtnHWND = add("BUTTON", "설치", 0x00000001, 337, 250, 90, 34, idInstall)
-	cancelBtnHWND = add("BUTTON", "취소", 0, 437, 250, 90, 34, idCancel)
+	sendMessage.Call(progressHWND, pbmSetBarColor, 0, 0x00EF6F2E)
+	sendMessage.Call(progressHWND, pbmSetBkColor, 0, 0x00EEEAE6)
+	statusHWND = add("STATIC", "준비가 완료되었습니다. 설치를 눌러 시작하세요.", 0, 38, 274, 552, 28, 0, subFont)
+	installBtnHWND = add("BUTTON", "설치 시작", 0x00000001|0x00008000, 444, 322, 146, 42, idInstall, buttonFont)
+	cancelBtnHWND = add("BUTTON", "취소", 0x00008000, 326, 322, 106, 42, idCancel, buttonFont)
 
 	user32.NewProc("ShowWindow").Call(installerHWND, 5)
 	user32.NewProc("UpdateWindow").Call(installerHWND)
@@ -385,9 +449,37 @@ func runUpdateProgress(r release) error {
 	destroyWindow := user32.NewProc("DestroyWindow")
 	setText := user32.NewProc("SetWindowTextW")
 	sendMessage := user32.NewProc("SendMessageW")
+	createBrush := gdi32.NewProc("CreateSolidBrush")
+	brandBrush, _, _ := createBrush.Call(0x00EF6F2E)
+	headerBrush, _, _ := createBrush.Call(0x00FCFAF8)
+	whiteBrush, _, _ := createBrush.Call(0x00FFFFFF)
+	setTextColor := gdi32.NewProc("SetTextColor")
+	setBkColor := gdi32.NewProc("SetBkColor")
+	var headerBand, headerTitle, headerSub, accentBar, logoText uintptr
 
 	wndProc := syscall.NewCallback(func(hwnd uintptr, m uint32, wp, lp uintptr) uintptr {
 		switch m {
+		case wmCtlColorStatic:
+			if lp == accentBar {
+				setBkColor.Call(wp, 0x00EF6F2E)
+				return brandBrush
+			}
+			if lp == headerBand || lp == headerTitle || lp == logoText {
+				setTextColor.Call(wp, 0x0037291F)
+				setBkColor.Call(wp, 0x00FCFAF8)
+				if lp == logoText {
+					setTextColor.Call(wp, 0x00EF6F2E)
+				}
+				return headerBrush
+			}
+			if lp == headerSub {
+				setTextColor.Call(wp, 0x008B7464)
+				setBkColor.Call(wp, 0x00FCFAF8)
+				return headerBrush
+			}
+			setTextColor.Call(wp, 0x00352A20)
+			setBkColor.Call(wp, 0x00FFFFFF)
+			return whiteBrush
 		case wmUpdateStep:
 			status, _ := getUpdateResult()
 			sendMessage.Call(updateBarHWND, pbmSetPos, wp, 0)
@@ -419,24 +511,35 @@ func runUpdateProgress(r release) error {
 
 	create := user32.NewProc("CreateWindowExW")
 	updateHWND, _, _ = create.Call(0, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(p16("JTSN 업데이트"))), 0x00CA0000,
-		uintptr(0x80000000), uintptr(0x80000000), 570, 245, 0, 0, hInstance, 0)
+		uintptr(0x80000000), uintptr(0x80000000), 640, 330, 0, 0, hInstance, 0)
 	if updateHWND == 0 {
 		return install(r, nil)
 	}
 
-	font, _, _ := gdi32.NewProc("CreateFontW").Call(^uintptr(17-1), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, uintptr(unsafe.Pointer(p16("Segoe UI"))))
-	add := func(class, text string, style uintptr, x, y, w, h int) uintptr {
+	makeFont := func(height int, weight int) uintptr {
+		font, _, _ := gdi32.NewProc("CreateFontW").Call(^uintptr(height-1), 0, 0, 0, uintptr(weight), 0, 0, 0, 1, 0, 0, 5, 0, uintptr(unsafe.Pointer(p16("Segoe UI"))))
+		return font
+	}
+	bodyFont, titleFont, subFont, percentFont, logoFont := makeFont(17, 400), makeFont(26, 700), makeFont(15, 400), makeFont(18, 700), makeFont(24, 800)
+	add := func(class, text string, style uintptr, x, y, w, h int, font uintptr) uintptr {
 		child, _, _ := create.Call(0, uintptr(unsafe.Pointer(p16(class))), uintptr(unsafe.Pointer(p16(text))), style|0x40000000|0x10000000,
 			uintptr(x), uintptr(y), uintptr(w), uintptr(h), updateHWND, 0, hInstance, 0)
 		sendMessage.Call(child, wmSetFont, font, 1)
 		return child
 	}
-	add("STATIC", "JTSN 업데이트", 0, 32, 28, 490, 30)
-	add("STATIC", fmt.Sprintf("v%s → %s", launcherVersion, r.Tag), 0, 32, 65, 490, 22)
-	updateTextHWND = add("STATIC", "업데이트를 준비하고 있습니다...", 0, 32, 102, 495, 24)
-	updateBarHWND = add("msctls_progress32", "", 0, 32, 138, 445, 20)
-	updatePctHWND = add("STATIC", "0%", 0x00000002, 485, 136, 42, 24)
+	headerBand = add("STATIC", "", 0, 0, 0, 640, 108, bodyFont)
+	accentBar = add("STATIC", "", 0, 0, 0, 8, 108, bodyFont)
+	logoText = add("STATIC", "JT·SN", 0, 34, 31, 82, 34, logoFont)
+	headerTitle = add("STATIC", "JTSN 업데이트", 0, 126, 24, 450, 36, titleFont)
+	headerSub = add("STATIC", "새 버전을 안전하게 적용하고 있습니다", 0, 127, 66, 450, 24, subFont)
+	add("STATIC", fmt.Sprintf("v%s  →  %s", launcherVersion, r.Tag), 0, 38, 132, 400, 26, bodyFont)
+	updateTextHWND = add("STATIC", "업데이트를 준비하고 있습니다...", 0, 38, 174, 500, 26, subFont)
+	updateBarHWND = add("msctls_progress32", "", 0, 38, 218, 496, 16, bodyFont)
+	updatePctHWND = add("STATIC", "0%", 0x00000002, 544, 212, 48, 28, percentFont)
 	sendMessage.Call(updateBarHWND, pbmSetRange32, 0, 100)
+	sendMessage.Call(updateBarHWND, pbmSetBarColor, 0, 0x00EF6F2E)
+	sendMessage.Call(updateBarHWND, pbmSetBkColor, 0, 0x00EEEAE6)
+	add("STATIC", "창을 닫지 마세요. 완료되면 자동으로 다시 실행됩니다.", 0, 38, 252, 554, 24, subFont)
 
 	postMessage := user32.NewProc("PostMessageW")
 	go func() {
