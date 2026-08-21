@@ -508,6 +508,8 @@ var launcherRecentLoaded bool
 var launcherSearchHandle syscall.Handle
 var launcherSearchQuery string
 var launcherRebuilding bool
+var startupFiles []string
+var startupFolder string
 var sidebarControls = map[syscall.Handle]bool{}
 var panelControls = map[syscall.Handle]bool{}
 var headerControls = map[syscall.Handle]bool{}
@@ -570,6 +572,13 @@ func main() {
 		}
 		if strings.HasPrefix(a, "--print-worker=") {
 			printWorkerJob = strings.TrimPrefix(a, "--print-worker=")
+		}
+		if !strings.HasPrefix(a, "--") {
+			if st, err := os.Stat(a); err == nil && st.IsDir() {
+				startupFolder = a
+			} else if err == nil {
+				startupFiles = appendUnique(startupFiles, a)
+			}
 		}
 	}
 	if printWorkerJob != "" {
@@ -740,6 +749,18 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 		} else {
 			procDragAcceptFiles.Call(uintptr(hwnd), 1)
 			renderTool(currentTool)
+			if len(startupFiles) > 0 {
+				currentFiles = appendUnique(currentFiles, startupFiles...)
+				refreshFileList()
+			}
+			if startupFolder != "" {
+				currentFolder = startupFolder
+				if currentTool == ID_NAV_FOLDERS {
+					setText(editD, "기준 폴더: "+currentFolder)
+				} else if currentTool == ID_NAV_DUP {
+					setText(editD, "검사 폴더: "+currentFolder)
+				}
+			}
 		}
 		return 0
 	case WM_PAINT:
@@ -849,7 +870,7 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			case id == ID_LAUNCH_EDIT:
 				info("즐겨찾기 편집은 다음 단계에서 도구 고정/순서 변경 기능으로 확장할 수 있습니다.\n\n현재 버전은 실제 제공되는 8개 도구를 기본 즐겨찾기로 표시합니다.")
 			case id == ID_SIDE_SETTINGS:
-				info("JTSN 설정\n\n현재는 로컬 처리 방식과 기본 UI 설정을 사용합니다. 별도 서버 업로드 없이 PC에서 처리됩니다.")
+				toggleExplorerContextMenus()
 			case id == ID_SIDE_INFO:
 				info("잡툴사니 · JTSN v5.1\n\n회사에서 자주 쓰는 파일·PDF·이미지·텍스트 작업을 빠르게 처리하는 로컬 유틸리티입니다.")
 			}
@@ -1232,6 +1253,103 @@ func toolSearchText(id int) string {
 	return toolName(id) + " " + aliases[id]
 }
 
+type explorerMenuSpec struct {
+	key   string
+	label string
+	mode  string
+}
+
+func explorerMenuSpecs() []explorerMenuSpec {
+	return []explorerMenuSpec{
+		{`HKCU\Software\Classes\*\shell\JTSN.Print`, "JTSN · 파일 일괄 인쇄", "print"},
+		{`HKCU\Software\Classes\*\shell\JTSN.PDF`, "JTSN · PDF 도구", "pdf"},
+		{`HKCU\Software\Classes\*\shell\JTSN.Rename`, "JTSN · 파일명 일괄 변경", "rename"},
+		{`HKCU\Software\Classes\*\shell\JTSN.Image`, "JTSN · 이미지 변환", "image"},
+		{`HKCU\Software\Classes\Directory\shell\JTSN.Duplicate`, "JTSN · 중복파일 찾기", "duplicate"},
+		{`HKCU\Software\Classes\Directory\Background\shell\JTSN.Folders`, "JTSN · 폴더 일괄 생성", "folders"},
+	}
+}
+
+func explorerContextMenusInstalled() bool {
+	cmd := exec.Command("reg.exe", "query", explorerMenuSpecs()[0].key)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	return cmd.Run() == nil
+}
+
+func toggleExplorerContextMenus() {
+	installed := explorerContextMenusInstalled()
+	action := "등록"
+	if installed {
+		action = "해제"
+	}
+	if ask("Windows 탐색기 우클릭 메뉴를 "+action+"할까요?\n\n파일: 인쇄, PDF, 파일명 변경, 이미지 변환\n폴더: 중복파일 찾기, 폴더 일괄 생성") != IDYES {
+		return
+	}
+	var err error
+	if installed {
+		err = uninstallExplorerContextMenus()
+	} else {
+		err = installExplorerContextMenus()
+	}
+	if err != nil {
+		errorBox("탐색기 우클릭 메뉴 처리 중 오류가 발생했습니다.\n\n" + err.Error())
+		return
+	}
+	if installed {
+		info("탐색기 우클릭 메뉴를 해제했습니다.")
+	} else {
+		info("탐색기 우클릭 메뉴를 등록했습니다.\n\n파일이나 폴더를 우클릭하면 JTSN 도구를 바로 열 수 있습니다.")
+	}
+}
+
+func installExplorerContextMenus() error {
+	exePath, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	for _, spec := range explorerMenuSpecs() {
+		if err := runReg("add", spec.key, "/v", "MUIVerb", "/t", "REG_SZ", "/d", spec.label, "/f"); err != nil {
+			return err
+		}
+		if err := runReg("add", spec.key, "/v", "Icon", "/t", "REG_SZ", "/d", exePath, "/f"); err != nil {
+			return err
+		}
+		if strings.Contains(spec.key, `\*\shell\`) {
+			if err := runReg("add", spec.key, "/v", "MultiSelectModel", "/t", "REG_SZ", "/d", "Player", "/f"); err != nil {
+				return err
+			}
+		}
+		placeholder := `%1`
+		if strings.Contains(spec.key, `Directory\Background`) {
+			placeholder = `%V`
+		}
+		command := fmt.Sprintf(`"%s" --tool=%s "%s"`, exePath, spec.mode, placeholder)
+		if err := runReg("add", spec.key+`\command`, "/ve", "/t", "REG_SZ", "/d", command, "/f"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func uninstallExplorerContextMenus() error {
+	var firstErr error
+	for _, spec := range explorerMenuSpecs() {
+		if err := runReg("delete", spec.key, "/f"); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func runReg(args ...string) error {
+	cmd := exec.Command("reg.exe", args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
 func launcherRecentPath() string {
 	cache, err := os.UserCacheDir()
 	if err != nil || cache == "" {
@@ -1306,7 +1424,7 @@ func buildLauncher(hwnd syscall.Handle) {
 	}
 
 	// Bottom rail actions. They are intentionally quiet and secondary.
-	launcherButton(hwnd, "설정", 18, 618, 98, 42, ID_SIDE_SETTINGS, BTN_LAUNCH_GHOST)
+	launcherButton(hwnd, "우클릭 메뉴", 18, 618, 98, 42, ID_SIDE_SETTINGS, BTN_LAUNCH_GHOST)
 	launcherButton(hwnd, "정보", 128, 618, 98, 42, ID_SIDE_INFO, BTN_LAUNCH_GHOST)
 
 	// Main workspace heading.
