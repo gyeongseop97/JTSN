@@ -1,0 +1,51 @@
+name: Build JTSN v5.53
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+      - name: Restore preserved JTSN core
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/gyeongseop97/JTSN/releases/download/v5.52/JTSN_v5.52.exe" -OutFile "previous.exe"
+          @'
+          from pathlib import Path
+          import hashlib
+          wrapper = Path("previous.exe").read_bytes()
+          core = wrapper[3350336:3350336+53938688]
+          expected = "35774f20be8c083e79893a5983e2d1acaaee76103d2cd827807973be07ff2eed"
+          actual = hashlib.sha256(core).hexdigest()
+          if actual != expected:
+              raise SystemExit(f"core checksum mismatch: {actual}")
+          Path("installer/core").mkdir(exist_ok=True)
+          Path("installer/core/JTSN_v5.50.exe").write_bytes(core)
+          '@ | python -
+      - name: Build installer
+        shell: pwsh
+        working-directory: installer
+        run: |
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_Setup_v5.53.exe .
+          $hash=(Get-FileHash JTSN_Setup_v5.53.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  JTSN_Setup_v5.53.exe" | Set-Content -Encoding ascii JTSN_Setup_v5.53.sha256
+          Compress-Archive -Path main.go,go.mod,README.md -DestinationPath JTSN_v5.53_source.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JTSN-v5.53-release
+          path: |
+            installer/JTSN_Setup_v5.53.exe
+            installer/JTSN_Setup_v5.53.sha256
+            installer/JTSN_v5.53_source.zip
+          if-no-files-found: error
+          retention-days: 7
