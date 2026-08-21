@@ -101,6 +101,8 @@ const (
 	WM_CAPTURECHANGED   = 0x0215
 	WM_TIMER            = 0x0113
 	WM_HOTKEY           = 0x0312
+	WM_LBUTTONDBLCLK    = 0x0203
+	WM_RBUTTONUP        = 0x0205
 	WM_MOUSELEAVE       = 0x02A3
 	WM_CTLCOLORSTATIC   = 0x0138
 	WM_CTLCOLOREDIT     = 0x0133
@@ -114,6 +116,7 @@ const (
 	WM_APP_ERROR        = WM_APP + 7
 	WM_APP_DUPDELETED   = WM_APP + 8
 	WM_APP_SEARCH       = WM_APP + 9
+	WM_APP_TRAY         = WM_APP + 20
 	WM_DROPFILES        = 0x0233
 	WM_SETICON          = 0x0080
 	ICON_SMALL          = 0
@@ -132,6 +135,12 @@ const (
 	MOD_CONTROL = 0x0002
 	MOD_SHIFT   = 0x0004
 	HOTKEY_ID   = 0x4A54
+
+	NIM_ADD     = 0x00000000
+	NIM_DELETE  = 0x00000002
+	NIF_MESSAGE = 0x00000001
+	NIF_ICON    = 0x00000002
+	NIF_TIP     = 0x00000004
 
 	VK_LBUTTON          = 0x01
 	ID_TIMER_EYEDROPPER = 9101
@@ -203,6 +212,8 @@ const (
 	ID_LAUNCH_EDIT    = 630
 	ID_RECENT_CLEAR   = 631
 	ID_LAUNCH_SEARCH  = 632
+	ID_TRAY_OPEN      = 7001
+	ID_TRAY_EXIT      = 7002
 
 	ID_BTN_ADD        = 201
 	ID_BTN_CLEAR      = 202
@@ -395,6 +406,24 @@ type LVITEMW struct {
 	IGroup     int32
 }
 
+type NOTIFYICONDATAW struct {
+	CbSize           uint32
+	HWnd             uintptr
+	UID              uint32
+	UFlags           uint32
+	UCallbackMessage uint32
+	HIcon            uintptr
+	SzTip            [128]uint16
+	DwState          uint32
+	DwStateMask      uint32
+	SzInfo           [256]uint16
+	Version          uint32
+	SzInfoTitle      [64]uint16
+	DwInfoFlags      uint32
+	GuidItem         [16]byte
+	HBalloonIcon     uintptr
+}
+
 var (
 	user32   = syscall.NewLazyDLL("user32.dll")
 	gdi32    = syscall.NewLazyDLL("gdi32.dll")
@@ -454,6 +483,7 @@ var (
 	procSetForegroundWindow  = user32.NewProc("SetForegroundWindow")
 	procRegisterHotKey       = user32.NewProc("RegisterHotKey")
 	procUnregisterHotKey     = user32.NewProc("UnregisterHotKey")
+	procShellNotifyIconW     = shell32.NewProc("Shell_NotifyIconW")
 
 	procCreateFontW            = gdi32.NewProc("CreateFontW")
 	procGetPixel               = gdi32.NewProc("GetPixel")
@@ -525,6 +555,8 @@ var startupFiles []string
 var startupFolder string
 var launcherMutex syscall.Handle
 var launcherHotkeyRegistered bool
+var trayIconAdded bool
+var trayExitRequested bool
 var sidebarControls = map[syscall.Handle]bool{}
 var panelControls = map[syscall.Handle]bool{}
 var headerControls = map[syscall.Handle]bool{}
@@ -660,6 +692,7 @@ func main() {
 	procUpdateWindow.Call(uintptr(mainHWND))
 	if launchMode == "" {
 		launcherHotkeyRegistered = registerLauncherHotkey(mainHWND)
+		initTray(mainHWND)
 	}
 
 	var msg MSG
@@ -856,6 +889,16 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			procSetForegroundWindow.Call(uintptr(hwnd))
 			return 0
 		}
+	case WM_APP_TRAY:
+		if launchMode == "" {
+			switch uint32(lParam) {
+			case WM_LBUTTONDBLCLK:
+				showLauncherFromTray(hwnd)
+			case WM_RBUTTONUP:
+				showTrayMenu(hwnd)
+			}
+			return 0
+		}
 	case WM_COMMAND:
 		id := int(wParam & 0xffff)
 		notify := int((wParam >> 16) & 0xffff)
@@ -986,12 +1029,17 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 		finishBusy()
 		return 0
 	case WM_CLOSE:
+		if launchMode == "" && !trayExitRequested {
+			procShowWindow.Call(uintptr(hwnd), SW_HIDE)
+			return 0
+		}
 		if busy && ask("작업이 진행 중입니다. 이 도구 창을 닫을까요?") != IDYES {
 			return 0
 		}
 		procDestroyWindow.Call(uintptr(hwnd))
 		return 0
 	case WM_DESTROY:
+		shutdownTray()
 		if launcherHotkeyRegistered {
 			procUnregisterHotKey.Call(uintptr(hwnd), HOTKEY_ID)
 			launcherHotkeyRegistered = false
@@ -1037,6 +1085,52 @@ func registerLauncherHotkey(hwnd syscall.Handle) bool {
 	// 다음 복원 단계에서 이 등록 함수를 재사용합니다.
 	r, _, _ := procRegisterHotKey.Call(uintptr(hwnd), HOTKEY_ID, MOD_CONTROL|MOD_SHIFT, uintptr('J'))
 	return r != 0
+}
+
+func initTray(hwnd syscall.Handle) {
+	if trayIconAdded || appIconSmall == 0 {
+		return
+	}
+	data := NOTIFYICONDATAW{CbSize: uint32(unsafe.Sizeof(NOTIFYICONDATAW{})), HWnd: uintptr(hwnd), UID: 1, UFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP, UCallbackMessage: WM_APP_TRAY, HIcon: uintptr(appIconSmall)}
+	copy(data.SzTip[:], syscall.StringToUTF16("JTSN · 잡툴사니"))
+	r, _, _ := procShellNotifyIconW.Call(NIM_ADD, uintptr(unsafe.Pointer(&data)))
+	trayIconAdded = r != 0
+}
+
+func shutdownTray() {
+	if !trayIconAdded {
+		return
+	}
+	data := NOTIFYICONDATAW{CbSize: uint32(unsafe.Sizeof(NOTIFYICONDATAW{})), HWnd: uintptr(mainHWND), UID: 1}
+	procShellNotifyIconW.Call(NIM_DELETE, uintptr(unsafe.Pointer(&data)))
+	trayIconAdded = false
+}
+
+func showLauncherFromTray(hwnd syscall.Handle) {
+	procShowWindow.Call(uintptr(hwnd), SW_RESTORE)
+	procSetForegroundWindow.Call(uintptr(hwnd))
+}
+
+func showTrayMenu(hwnd syscall.Handle) {
+	menu, _, _ := procCreatePopupMenu.Call()
+	if menu == 0 {
+		return
+	}
+	defer procDestroyMenu.Call(menu)
+	procAppendMenuW.Call(menu, 0, ID_TRAY_OPEN, uintptr(unsafe.Pointer(p16("JTSN 열기"))))
+	procAppendMenuW.Call(menu, 0x00000800, 0, 0)
+	procAppendMenuW.Call(menu, 0, ID_TRAY_EXIT, uintptr(unsafe.Pointer(p16("완전히 종료"))))
+	var pt POINT
+	procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
+	procSetForegroundWindow.Call(uintptr(hwnd))
+	choice, _, _ := procTrackPopupMenu.Call(menu, TPM_RETURNCMD, uintptr(pt.X), uintptr(pt.Y), 0, uintptr(hwnd), 0)
+	switch choice {
+	case ID_TRAY_OPEN:
+		showLauncherFromTray(hwnd)
+	case ID_TRAY_EXIT:
+		trayExitRequested = true
+		procDestroyWindow.Call(uintptr(hwnd))
+	}
 }
 
 func initFonts() {
