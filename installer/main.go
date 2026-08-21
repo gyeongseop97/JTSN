@@ -17,13 +17,14 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
 )
 
 const (
-	launcherVersion = "5.57"
+	launcherVersion = "5.58"
 	releaseAPI      = "https://api.github.com/repos/gyeongseop97/JTSN/releases/latest"
 	appFolderName   = "JTSN"
 	installedName   = "JTSN.exe"
@@ -33,6 +34,9 @@ const (
 
 //go:embed core/JTSN_v5.50.exe
 var embeddedCore embed.FS
+
+//go:embed assets/JTSN.ico
+var appIcon []byte
 
 type asset struct {
 	Name   string `json:"name"`
@@ -58,6 +62,8 @@ const (
 	wmSetFont     = 0x0030
 	wmAppProgress = 0x8001
 	wmAppDone     = 0x8002
+	wmUpdateStep  = 0x8003
+	wmUpdateDone  = 0x8004
 	pbmSetRange32 = 0x0406
 	pbmSetPos     = 0x0402
 	idInstall     = 1001
@@ -75,6 +81,13 @@ var (
 	cancelBtnHWND  uintptr
 	installerSelf  string
 	installerWant  string
+	updateHWND     uintptr
+	updateBarHWND  uintptr
+	updateTextHWND uintptr
+	updatePctHWND  uintptr
+	updateMu       sync.Mutex
+	updateStatus   string
+	updateErr      error
 )
 
 func p16(s string) *uint16 { p, _ := syscall.UTF16PtrFromString(s); return p }
@@ -105,6 +118,7 @@ func main() {
 	}
 	if len(os.Args) >= 3 && os.Args[1] == "--post-update" {
 		_ = os.Remove(os.Args[2])
+		refreshBranding()
 		os.Args = os.Args[:1]
 	}
 	if !ensureInstalled() {
@@ -121,7 +135,7 @@ func main() {
 		}
 		prompt += "\n\n지금 업데이트할까요?"
 		if message(prompt, 0x00000004|0x00000020) == 6 {
-			if err := install(rel); err == nil {
+			if err := runUpdateProgress(rel); err == nil {
 				return
 			} else {
 				message("업데이트에 실패했습니다. 기존 버전을 실행합니다.\n\n"+err.Error(), 0x00000000|0x00000010)
@@ -155,8 +169,7 @@ func ensureInstalled() bool {
 	if !runInstallWizard(self, want) {
 		return false
 	}
-	registerUninstall(want)
-	createDesktopShortcut()
+	refreshBranding()
 	cmd := exec.Command(want, "--cleanup-source", self, strconv.Itoa(os.Getpid()))
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	if err := cmd.Start(); err != nil {
@@ -317,6 +330,136 @@ func runInstallWizard(self, want string) bool {
 	return installOK
 }
 
+func setUpdateResult(status string, err error) {
+	updateMu.Lock()
+	updateStatus = status
+	updateErr = err
+	updateMu.Unlock()
+}
+
+func getUpdateResult() (string, error) {
+	updateMu.Lock()
+	defer updateMu.Unlock()
+	return updateStatus, updateErr
+}
+
+func runUpdateProgress(r release) error {
+	setUpdateResult("업데이트를 준비하고 있습니다...", nil)
+
+	user32 := syscall.NewLazyDLL("user32.dll")
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	gdi32 := syscall.NewLazyDLL("gdi32.dll")
+	comctl32 := syscall.NewLazyDLL("comctl32.dll")
+	_ = comctl32.Load()
+	comctl32.NewProc("InitCommonControls").Call()
+
+	type wndClassEx struct {
+		Size, Style         uint32
+		WndProc             uintptr
+		ClsExtra, WndExtra  int32
+		Instance, Icon      uintptr
+		Cursor, Background  uintptr
+		MenuName, ClassName uintptr
+		IconSm              uintptr
+	}
+	type point struct{ X, Y int32 }
+	type msg struct {
+		HWnd, Message, WParam, LParam uintptr
+		Time                          uint32
+		Pt                            point
+		Private                       uint32
+	}
+
+	defWindowProc := user32.NewProc("DefWindowProcW")
+	postQuit := user32.NewProc("PostQuitMessage")
+	destroyWindow := user32.NewProc("DestroyWindow")
+	setText := user32.NewProc("SetWindowTextW")
+	sendMessage := user32.NewProc("SendMessageW")
+
+	wndProc := syscall.NewCallback(func(hwnd uintptr, m uint32, wp, lp uintptr) uintptr {
+		switch m {
+		case wmUpdateStep:
+			status, _ := getUpdateResult()
+			sendMessage.Call(updateBarHWND, pbmSetPos, wp, 0)
+			setText.Call(updateTextHWND, uintptr(unsafe.Pointer(p16(status))))
+			setText.Call(updatePctHWND, uintptr(unsafe.Pointer(p16(fmt.Sprintf("%d%%", wp)))))
+			return 0
+		case wmUpdateDone:
+			if wp == 1 {
+				sendMessage.Call(updateBarHWND, pbmSetPos, 100, 0)
+				setText.Call(updatePctHWND, uintptr(unsafe.Pointer(p16("100%"))))
+				setText.Call(updateTextHWND, uintptr(unsafe.Pointer(p16("업데이트 적용을 시작합니다. 잠시 후 자동으로 다시 실행됩니다."))))
+			}
+			destroyWindow.Call(hwnd)
+			return 0
+		case wmClose:
+			return 0
+		case wmDestroy:
+			postQuit.Call(0)
+			return 0
+		}
+		result, _, _ := defWindowProc.Call(hwnd, uintptr(m), wp, lp)
+		return result
+	})
+
+	hInstance, _, _ := kernel32.NewProc("GetModuleHandleW").Call(0)
+	className := p16("JTSNUpdateProgressWindow")
+	wc := wndClassEx{Size: uint32(unsafe.Sizeof(wndClassEx{})), WndProc: wndProc, Instance: hInstance, Background: 6, ClassName: uintptr(unsafe.Pointer(className))}
+	user32.NewProc("RegisterClassExW").Call(uintptr(unsafe.Pointer(&wc)))
+
+	create := user32.NewProc("CreateWindowExW")
+	updateHWND, _, _ = create.Call(0, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(p16("JTSN 업데이트"))), 0x00CA0000,
+		uintptr(0x80000000), uintptr(0x80000000), 570, 245, 0, 0, hInstance, 0)
+	if updateHWND == 0 {
+		return install(r, nil)
+	}
+
+	font, _, _ := gdi32.NewProc("CreateFontW").Call(^uintptr(17-1), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, uintptr(unsafe.Pointer(p16("Segoe UI"))))
+	add := func(class, text string, style uintptr, x, y, w, h int) uintptr {
+		child, _, _ := create.Call(0, uintptr(unsafe.Pointer(p16(class))), uintptr(unsafe.Pointer(p16(text))), style|0x40000000|0x10000000,
+			uintptr(x), uintptr(y), uintptr(w), uintptr(h), updateHWND, 0, hInstance, 0)
+		sendMessage.Call(child, wmSetFont, font, 1)
+		return child
+	}
+	add("STATIC", "JTSN 업데이트", 0, 32, 28, 490, 30)
+	add("STATIC", fmt.Sprintf("v%s → %s", launcherVersion, r.Tag), 0, 32, 65, 490, 22)
+	updateTextHWND = add("STATIC", "업데이트를 준비하고 있습니다...", 0, 32, 102, 495, 24)
+	updateBarHWND = add("msctls_progress32", "", 0, 32, 138, 445, 20)
+	updatePctHWND = add("STATIC", "0%", 0x00000002, 485, 136, 42, 24)
+	sendMessage.Call(updateBarHWND, pbmSetRange32, 0, 100)
+
+	postMessage := user32.NewProc("PostMessageW")
+	go func() {
+		err := install(r, func(percent int, status string) {
+			setUpdateResult(status, nil)
+			postMessage.Call(updateHWND, wmUpdateStep, uintptr(percent), 0)
+		})
+		setUpdateResult("", err)
+		if err != nil {
+			postMessage.Call(updateHWND, wmUpdateDone, 0, 0)
+			return
+		}
+		postMessage.Call(updateHWND, wmUpdateDone, 1, 0)
+	}()
+
+	user32.NewProc("ShowWindow").Call(updateHWND, 5)
+	user32.NewProc("UpdateWindow").Call(updateHWND)
+	var m msg
+	getMessage := user32.NewProc("GetMessageW")
+	translate := user32.NewProc("TranslateMessage")
+	dispatch := user32.NewProc("DispatchMessageW")
+	for {
+		result, _, _ := getMessage.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
+		if int32(result) <= 0 {
+			break
+		}
+		translate.Call(uintptr(unsafe.Pointer(&m)))
+		dispatch.Call(uintptr(unsafe.Pointer(&m)))
+	}
+	_, err := getUpdateResult()
+	return err
+}
+
 func copyFileProgress(src, dst string, progress func(int)) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -377,8 +520,17 @@ func createDesktopShortcut() {
 	// Resolve the target from the installing user's environment inside
 	// PowerShell. This prevents a build-machine profile path from leaking into
 	// the desktop shortcut when the installer is packaged elsewhere.
-	script := "$d=[Environment]::GetFolderPath('Desktop');$t=Join-Path $env:LOCALAPPDATA 'Programs\\JTSN\\JTSN.exe';$wd=Split-Path -Parent $t;Remove-Item -LiteralPath (Join-Path $d '잡툴사니.lnk') -Force -ErrorAction SilentlyContinue;$w=New-Object -ComObject WScript.Shell;$s=$w.CreateShortcut((Join-Path $d 'JTSN.lnk'));$s.TargetPath=$t;$s.WorkingDirectory=$wd;$s.IconLocation=$t+',0';$s.Description='JTSN · 잡툴사니';$s.Save()"
+	script := "$d=[Environment]::GetFolderPath('Desktop');$wd=Join-Path $env:LOCALAPPDATA 'Programs\\JTSN';$t=Join-Path $wd 'JTSN.exe';$i=Join-Path $wd 'JTSN_v" + launcherVersion + ".ico';Remove-Item -LiteralPath (Join-Path $d '잡툴사니.lnk') -Force -ErrorAction SilentlyContinue;Remove-Item -LiteralPath (Join-Path $d 'JTSN.lnk') -Force -ErrorAction SilentlyContinue;$w=New-Object -ComObject WScript.Shell;$s=$w.CreateShortcut((Join-Path $d 'JTSN.lnk'));$s.TargetPath=$t;$s.WorkingDirectory=$wd;$s.IconLocation=$i+',0';$s.Description='JTSN · 잡툴사니';$s.Save()"
 	_ = runHidden("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script)
+}
+
+func refreshBranding() {
+	_ = os.MkdirAll(installDir(), 0755)
+	iconPath := filepath.Join(installDir(), "JTSN_v"+launcherVersion+".ico")
+	_ = os.WriteFile(iconPath, appIcon, 0644)
+	createDesktopShortcut()
+	registerUninstall(installedPath())
+	_ = runHidden("ie4uinit.exe", "-show")
 }
 
 func removeDesktopShortcut() {
@@ -392,7 +544,8 @@ func registerUninstall(target string) {
 	_ = runHidden("reg.exe", "add", key, "/v", "DisplayVersion", "/t", "REG_SZ", "/d", launcherVersion, "/f")
 	_ = runHidden("reg.exe", "add", key, "/v", "Publisher", "/t", "REG_SZ", "/d", "JTSN", "/f")
 	_ = runHidden("reg.exe", "add", key, "/v", "InstallLocation", "/t", "REG_SZ", "/d", filepath.Dir(target), "/f")
-	_ = runHidden("reg.exe", "add", key, "/v", "DisplayIcon", "/t", "REG_SZ", "/d", target, "/f")
+	iconPath := filepath.Join(filepath.Dir(target), "JTSN_v"+launcherVersion+".ico")
+	_ = runHidden("reg.exe", "add", key, "/v", "DisplayIcon", "/t", "REG_SZ", "/d", iconPath, "/f")
 	_ = runHidden("reg.exe", "add", key, "/v", "UninstallString", "/t", "REG_SZ", "/d", `"`+target+`" --uninstall`, "/f")
 	_ = runHidden("reg.exe", "add", key, "/v", "NoModify", "/t", "REG_DWORD", "/d", "1", "/f")
 	_ = runHidden("reg.exe", "add", key, "/v", "NoRepair", "/t", "REG_DWORD", "/d", "1", "/f")
@@ -436,6 +589,10 @@ func finishUninstall(dir, pidText string) {
 }
 
 func request(url string, limit int64) ([]byte, error) {
+	return requestProgress(url, limit, nil)
+}
+
+func requestProgress(url string, limit int64, progress func(done, total int64)) ([]byte, error) {
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -450,7 +607,32 @@ func request(url string, limit int64) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("서버 응답 코드 %d", resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, limit))
+	if resp.ContentLength > limit {
+		return nil, fmt.Errorf("다운로드 파일이 허용 크기를 초과했습니다")
+	}
+	var buf bytes.Buffer
+	chunk := make([]byte, 256<<10)
+	var done int64
+	for {
+		n, readErr := resp.Body.Read(chunk)
+		if n > 0 {
+			done += int64(n)
+			if done > limit {
+				return nil, fmt.Errorf("다운로드 파일이 허용 크기를 초과했습니다")
+			}
+			_, _ = buf.Write(chunk[:n])
+			if progress != nil {
+				progress(done, resp.ContentLength)
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return nil, readErr
+		}
+	}
+	return buf.Bytes(), nil
 }
 
 func latest() (release, error) {
@@ -508,11 +690,31 @@ func newer(remote, current string) bool {
 	return false
 }
 
-func install(r release) error {
-	exe, err := request(r.EXE, 300<<20)
+func install(r release, progress func(int, string)) error {
+	report := func(percent int, status string) {
+		if progress != nil {
+			progress(percent, status)
+		}
+	}
+	report(2, "업데이트 파일을 준비하고 있습니다...")
+	exe, err := requestProgress(r.EXE, 300<<20, func(done, total int64) {
+		percent := 8
+		if total > 0 {
+			percent = 5 + int(done*77/total)
+			if percent > 82 {
+				percent = 82
+			}
+		}
+		status := fmt.Sprintf("업데이트 파일을 다운로드하고 있습니다... %.1f MB", float64(done)/(1<<20))
+		if total > 0 {
+			status = fmt.Sprintf("업데이트 파일을 다운로드하고 있습니다... %.1f / %.1f MB", float64(done)/(1<<20), float64(total)/(1<<20))
+		}
+		report(percent, status)
+	})
 	if err != nil {
 		return err
 	}
+	report(85, "다운로드 파일의 무결성을 확인하고 있습니다...")
 	want := r.HASH
 	if want == "" {
 		sum, err := request(r.SUM, 1<<20)
@@ -530,6 +732,7 @@ func install(r release) error {
 	if len(want) != 64 || want != got {
 		return fmt.Errorf("SHA-256 검증에 실패했습니다")
 	}
+	report(92, "업데이트 설치를 준비하고 있습니다...")
 	dir := filepath.Join(os.TempDir(), "JTSN-Update")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
@@ -538,13 +741,18 @@ func install(r release) error {
 	if err := os.WriteFile(p, exe, 0755); err != nil {
 		return err
 	}
+	report(97, "새 버전을 적용하고 있습니다...")
 	self, err := os.Executable()
 	if err != nil {
 		return err
 	}
 	cmd := exec.Command(p, "--apply-update", self, strconv.Itoa(os.Getpid()))
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	return cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	report(100, "업데이트를 시작했습니다. 잠시 후 다시 실행됩니다.")
+	return nil
 }
 
 func applyUpdate(target, pidText string) {
