@@ -231,7 +231,6 @@ const (
 	ID_LAUNCH_ADD           = 632
 	ID_LAUNCH_CANCEL        = 633
 	ID_LAUNCH_SEARCH        = 634
-	ID_LAUNCH_SEARCH_FRAME  = 635
 	ID_FAV_REMOVE_BASE      = 6700
 	ID_RECENT_CLEAR         = 631
 	ID_SETTINGS_STANDARD    = 640
@@ -1199,8 +1198,6 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			case id == ID_LAUNCH_SEARCH && notify == EN_CHANGE && !launcherSearchRebuilding:
 				launcherSearchQuery = strings.TrimSpace(getText(ctl))
 				procPostMessageW.Call(uintptr(hwnd), WM_APP_SEARCH, 0, 0)
-			case id == ID_LAUNCH_SEARCH_FRAME && launcherSearchHandle != 0:
-				procSetFocus.Call(uintptr(launcherSearchHandle))
 			case id >= ID_FAV_REMOVE_BASE+ID_NAV_PRINT && id <= ID_FAV_REMOVE_BASE+ID_NAV_OCR:
 				removeInlineFavorite(id - ID_FAV_REMOVE_BASE)
 			case id >= ID_NAV_PRINT && id <= ID_NAV_OCR:
@@ -1519,6 +1516,13 @@ func paintWindowFrame(hwnd syscall.Handle, hdc uintptr, client RECT) {
 		procLineTo.Call(hdc, uintptr(client.Right), uintptr(footerY))
 		procSelectObject.Call(hdc, oldFooter)
 		procDeleteObject.Call(footerPen)
+		if !launcherFavoriteEditing && launcherSearchHandle != 0 {
+			searchBorder := rgb(203, 213, 225)
+			if focusedControl == launcherSearchHandle {
+				searchBorder = rgb(74, 118, 245)
+			}
+			drawSoftCard(syscall.Handle(hdc), RECT{client.Right - 358, 23, client.Right - 126, 63}, 12, searchBorder, rgb(255, 255, 255))
+		}
 
 		drawLauncherBrand(syscall.Handle(hdc))
 		return
@@ -2614,7 +2618,6 @@ func buildLauncher(hwnd syscall.Handle) {
 	}
 	launcherLabel(hwnd, section, startX, 28, 360, 34, fontLauncherTitle, false, false)
 	if !launcherFavoriteEditing {
-		launcherButton(hwnd, "", contentRight-330, 23, 232, 40, ID_LAUNCH_SEARCH_FRAME, BTN_SECONDARY)
 		if launcherSearchHandle == 0 {
 			launcherSearchRebuilding = true
 			launcherSearchHandle = createWindow(0, "EDIT", launcherSearchQuery, WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_AUTOHSCROLL, contentRight-318, 27, 208, 32, hwnd, ID_LAUNCH_SEARCH)
@@ -2622,7 +2625,7 @@ func buildLauncher(hwnd syscall.Handle) {
 			procSendMessageW.Call(uintptr(launcherSearchHandle), EM_SETMARGINS, EC_LEFTMARGIN|EC_RIGHTMARGIN, uintptr(12|(12<<16)))
 			launcherSearchRebuilding = false
 		} else {
-			procSetWindowPos.Call(uintptr(launcherSearchHandle), 0, uintptr(contentRight-318), 27, 208, 32, 0)
+			procSetWindowPos.Call(uintptr(launcherSearchHandle), 0, uintptr(contentRight-318), 27+APP_CHROME_HEIGHT, 208, 32, 0)
 			procShowWindow.Call(uintptr(launcherSearchHandle), SW_SHOW)
 		}
 	} else if launcherSearchHandle != 0 {
