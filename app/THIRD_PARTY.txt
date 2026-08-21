@@ -1,0 +1,15 @@
+JTSN · 잡툴사니 does not bundle the following third-party binaries in this package.
+They are downloaded from their official distribution locations on first use and cached locally.
+
+SumatraPDF 3.6.1
+Official site: https://www.sumatrapdfreader.org/
+Used for PDF printing with print settings.
+
+qpdf 12.4.0
+Official repository: https://github.com/qpdf/qpdf
+Used for PDF merge / page extraction / page split operations.
+
+PDFium preview engine
+- PDFium: open-source PDF rendering engine (BSD-style license)
+- Binary distribution helper: bblanchon/pdfium-binaries (MIT)
+- Runtime package used by v3.7: Windows x64 PDFium binary distribution
