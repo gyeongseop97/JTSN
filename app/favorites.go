@@ -96,7 +96,6 @@ func openFavoritesEditor() {
 	w, h := int32(500), int32(570)
 	favoritesHWND = createWindow(0, "JTSNFavoritesEditor", "즐겨찾기 편집", WS_POPUP|WS_VISIBLE|WS_CLIPCHILDREN,
 		int(owner.Left+(owner.Right-owner.Left-w)/2), int(owner.Top+(owner.Bottom-owner.Top-h)/2), int(w), int(h), mainHWND, 0)
-	enableNativeWindowShadow(favoritesHWND)
 	procSetForegroundWindow.Call(uintptr(favoritesHWND))
 }
 
