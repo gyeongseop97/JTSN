@@ -1,0 +1,42 @@
+name: Build JTSN v5.61 UI Test
+
+on:
+  push:
+    branches:
+      - fix/ui-responsive-v5.61
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+      - name: Format and verify source
+        shell: pwsh
+        working-directory: app
+        run: |
+          gofmt -w *.go
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+      - name: Build Windows GUI executable
+        shell: pwsh
+        working-directory: app
+        run: |
+          New-Item -ItemType Directory -Force build | Out-Null
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o build/JTSN_v5.61_UI_TEST.exe .
+          $hash=(Get-FileHash build/JTSN_v5.61_UI_TEST.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  JTSN_v5.61_UI_TEST.exe" | Set-Content -Encoding ascii build/JTSN_v5.61_UI_TEST.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JTSN-v5.61-UI-test
+          path: |
+            app/build/JTSN_v5.61_UI_TEST.exe
+            app/build/JTSN_v5.61_UI_TEST.sha256
+          if-no-files-found: error
+          retention-days: 14
