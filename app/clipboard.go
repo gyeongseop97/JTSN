@@ -332,6 +332,7 @@ func clipboardForegroundProcess() (string, bool) {
 	return strings.ToLower(filepath.Base(syscall.UTF16ToString(buf[:n]))), password
 }
 
+//go:nocheckptr
 func readClipboardSnapshot(hwnd syscall.Handle) (string, []byte, int, int) {
 	if r, _, _ := procOpenClipboard.Call(uintptr(hwnd)); r == 0 {
 		return "", nil, 0, 0
@@ -750,6 +751,7 @@ func handleClipboardCommand(id, notify int) bool {
 	return false
 }
 
+//go:nocheckptr
 func clipboardHandleNotify(lParam uintptr) bool {
 	clipNotifyResult = 0
 	if clipList == 0 || lParam == 0 {
@@ -885,6 +887,7 @@ func deleteClipboardRecords(includeFavorites bool) {
 	saveClipboardRecordsLocked()
 }
 
+//go:nocheckptr
 func restoreClipboardRecord(r clipboardRecord) bool {
 	if r.Kind != "image" {
 		return copyClipboard(r.Text) == nil
