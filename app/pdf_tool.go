@@ -1174,6 +1174,7 @@ func (a *pdfiumFns) close() {
 		a.dll.Release()
 	}
 }
+//go:nocheckptr
 func (a *pdfiumFns) renderPage(doc uintptr, index int) (*pdfThumb, error) {
 	var sz FS_SIZEF
 	ok, _, _ := a.getPageSize.Call(doc, uintptr(index), uintptr(unsafe.Pointer(&sz)))
