@@ -971,6 +971,7 @@ func launchTool(id int) {
 	}
 }
 
+//go:nocheckptr
 func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 	if launchMode != "" && currentTool == ID_NAV_PDF {
 		if handled, ret := pdfWindowMessage(hwnd, msg, wParam, lParam); handled {
@@ -2119,6 +2120,7 @@ func closePatchNotes(hwnd syscall.Handle) {
 	procDestroyWindow.Call(uintptr(hwnd))
 }
 
+//go:nocheckptr
 func patchNotesWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 	switch msg {
 	case WM_CREATE:
@@ -2276,6 +2278,7 @@ func clearSettingsControls() {
 	settingsControls = nil
 }
 
+//go:nocheckptr
 func settingsWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 	switch msg {
 	case WM_CREATE:
