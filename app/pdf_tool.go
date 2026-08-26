@@ -392,9 +392,6 @@ func pdfUpdateFileInfo() {
 			setText(pdfFileInfo, filepath.Base(currentFiles[0])+" · 미리보기 준비 중...")
 		}
 	}
-	if pdfMode == PDF_MODE_SPLIT {
-		pdfApplySplitControlVisibility()
-	}
 }
 
 func pdfUpdateOutputInfo() {
@@ -425,9 +422,6 @@ func pdfApplySplitControlVisibility() {
 		return
 	}
 	n := comboIndex(pdfSplitCountCombo) + 2
-	if len(currentFiles) == 0 {
-		n = 0
-	}
 	for i := 0; i < 10; i++ {
 		show := SW_HIDE
 		if i < n {
@@ -888,7 +882,7 @@ func pdfPaintMerge(hdc syscall.Handle) {
 
 func pdfPaintSplit(hdc syscall.Handle) {
 	// Split settings are grouped in one soft card so the page-range inputs read as a single task.
-	pdfDrawPanel(hdc, 44, 270, 930, 318, rgb(255, 255, 255), rgb(226, 232, 240), 14)
+	pdfDrawPanel(hdc, 44, 270, 930, 318, rgb(248, 250, 252), rgb(226, 232, 240), 14)
 	pdfDrawText(hdc, "분할 범위", RECT{60, 286, 180, 312}, rgb(51, 65, 85), fontButton, DT_LEFT|DT_SINGLELINE)
 	if len(currentFiles) == 0 {
 		pdfDrawCentered(hdc, "분할할 PDF를 추가하면 전체 페이지 수를 확인한 뒤 구간을 자동으로 나눠드립니다.", RECT{90, 402, 930, 444}, rgb(100, 116, 139), fontNormal)
