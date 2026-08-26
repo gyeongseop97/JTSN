@@ -1213,7 +1213,7 @@ func (a *pdfiumFns) renderPage(doc uintptr, index int) (*pdfThumb, error) {
 		return nil, fmt.Errorf("미리보기 버퍼 읽기 실패")
 	}
 	pixels := make([]byte, stride*h)
-	src := unsafe.Slice((*byte)(unsafe.Pointer(buf)), stride*h)
+	src := unsafe.Slice((*byte)(winPtr(buf)), stride*h)
 	copy(pixels, src)
 	return &pdfThumb{Page: index + 1, Width: w, Height: h, Stride: stride, Pixels: pixels}, nil
 }
