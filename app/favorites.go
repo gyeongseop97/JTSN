@@ -158,7 +158,7 @@ func favoritesWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) u
 		}
 		return 0
 	case WM_DRAWITEM:
-		dis := (*DRAWITEMSTRUCT)(unsafe.Pointer(lParam))
+		dis := (*DRAWITEMSTRUCT)(winPtr(lParam))
 		if dis != nil {
 			if kind, ok := buttonKinds[dis.HwndItem]; ok {
 				drawOwnerButton(dis, kind)
