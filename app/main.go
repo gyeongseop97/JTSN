@@ -1006,7 +1006,7 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 		return 0
 	case WM_DPICHANGED:
 		if lParam != 0 {
-			r := (*RECT)(unsafe.Pointer(lParam))
+			r := (*RECT)(winPtr(lParam))
 			procSetWindowPos.Call(uintptr(hwnd), 0, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right-r.Left), uintptr(r.Bottom-r.Top), SWP_NOZORDER)
 		}
 		if launchMode == "" && launcherBuilt {
@@ -1033,7 +1033,7 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 		paintWindow(hwnd)
 		return 0
 	case WM_DRAWITEM:
-		dis := (*DRAWITEMSTRUCT)(unsafe.Pointer(lParam))
+		dis := (*DRAWITEMSTRUCT)(winPtr(lParam))
 		if dis != nil && dis.HwndItem != 0 {
 			if kind, ok := buttonKinds[dis.HwndItem]; ok {
 				drawOwnerButton(dis, kind)
@@ -1169,7 +1169,7 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			return clipNotifyResult
 		}
 		if currentTool == ID_NAV_DUP && lParam != 0 {
-			nm := (*NMLISTVIEW)(unsafe.Pointer(lParam))
+			nm := (*NMLISTVIEW)(winPtr(lParam))
 			if nm.Hdr.HwndFrom == duplicateList && nm.Hdr.Code == LVN_COLUMNCLICK {
 				sortDuplicateRows(int(nm.ISubItem))
 				return 0
@@ -2205,7 +2205,7 @@ func patchNotesWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) 
 		procSetBkColor.Call(uintptr(hdc), rgb(255, 255, 255))
 		return uintptr(brushPanel)
 	case WM_DRAWITEM:
-		dis := (*DRAWITEMSTRUCT)(unsafe.Pointer(lParam))
+		dis := (*DRAWITEMSTRUCT)(winPtr(lParam))
 		if dis != nil {
 			if kind, ok := buttonKinds[dis.HwndItem]; ok {
 				drawOwnerButton(dis, kind)
@@ -2315,7 +2315,7 @@ func settingsWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) ui
 		procSetBkColor.Call(uintptr(hdc), rgb(255, 255, 255))
 		return uintptr(brushPanel)
 	case WM_DRAWITEM:
-		dis := (*DRAWITEMSTRUCT)(unsafe.Pointer(lParam))
+		dis := (*DRAWITEMSTRUCT)(winPtr(lParam))
 		if dis != nil {
 			if kind, ok := buttonKinds[dis.HwndItem]; ok {
 				drawOwnerButton(dis, kind)
