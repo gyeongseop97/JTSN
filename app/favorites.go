@@ -127,6 +127,7 @@ func selectedFavoriteEditorIndex() int {
 	return int(r)
 }
 
+//go:nocheckptr
 func favoritesWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 	switch msg {
 	case WM_CREATE:
