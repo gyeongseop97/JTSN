@@ -23,18 +23,19 @@ jobs:
         run: |
           go test -buildvcs=false ./...
           go vet -buildvcs=false ./...
-          New-Item -ItemType Directory -Force ../installer/core | Out-Null
-          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o ../installer/core/JTSN_v5.61.exe .
-          $coreHash=(Get-FileHash ../installer/core/JTSN_v5.61.exe -Algorithm SHA256).Hash.ToLower()
+          New-Item -ItemType Directory -Force ../outputs | Out-Null
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o ../outputs/JTSN_v5.61.exe .
+          $coreHash=(Get-FileHash ../outputs/JTSN_v5.61.exe -Algorithm SHA256).Hash.ToLower()
           if ($coreHash -ne "5d9f88926950ae354cc52e91b732661b8db11aa32fe4712b13f682bc051f7451") {
             throw "Unexpected core checksum: $coreHash"
           }
+          New-Item -ItemType Directory -Force ../installer/core | Out-Null
+          Copy-Item -Force ../outputs/JTSN_v5.61.exe ../installer/core/JTSN_v5.61.exe
       - name: Build single-file installer
         shell: pwsh
         working-directory: installer
         run: |
           go test -buildvcs=false ./...
-          New-Item -ItemType Directory -Force ../outputs | Out-Null
           go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o ../outputs/JTSN_Setup_v5.61.exe .
           $hash=(Get-FileHash ../outputs/JTSN_Setup_v5.61.exe -Algorithm SHA256).Hash.ToLower()
           "$hash  JTSN_Setup_v5.61.exe" | Set-Content -Encoding ascii ../outputs/JTSN_Setup_v5.61.exe.sha256
