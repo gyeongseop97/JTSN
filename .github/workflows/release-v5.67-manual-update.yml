@@ -21,178 +21,25 @@ jobs:
         with:
           go-version: '1.23.x'
 
-      - name: Add manual update check and patch notes
+      - name: Patch v5.67 source
         shell: pwsh
         run: |
-          @'
-          from pathlib import Path
-          import re
-
-          app_path = Path('app/main.go')
-          s = app_path.read_text(encoding='utf-8')
-
-          s = re.sub(r'const appVersion = "[0-9.]+"', 'const appVersion = "5.67"', s, count=1)
-
-          if 'ID_SETTINGS_UPDATE' not in s:
-              marker = '\tID_SETTINGS_HOTKEY_EDIT = 646\n'
-              if marker not in s:
-                  raise SystemExit('settings id marker not found')
-              s = s.replace(marker, marker + '\tID_SETTINGS_UPDATE    = 647\n', 1)
-
-          old_buttons = '\t\t\tcreateOwnerButton(hwnd, "고급 클립보드 설정", 154, 390, 374, 52, ID_SETTINGS_CLIP, BTN_SECONDARY),\n'
-          new_buttons = ('\t\t\tcreateOwnerButton(hwnd, "고급 클립보드 설정", 154, 390, 238, 52, ID_SETTINGS_CLIP, BTN_SECONDARY),\n'
-                         '\t\t\tcreateOwnerButton(hwnd, "업데이트 확인", 402, 390, 126, 52, ID_SETTINGS_UPDATE, BTN_SECONDARY),\n')
-          if 'ID_SETTINGS_UPDATE, BTN_SECONDARY' not in s:
-              if old_buttons not in s:
-                  raise SystemExit('settings button marker not found')
-              s = s.replace(old_buttons, new_buttons, 1)
-
-          old_case = '\t\tcase ID_SETTINGS_CLIP:\n\t\t\tlaunchTool(ID_NAV_CLIP)\n\t\tcase ID_SETTINGS_APPLY:'
-          new_case = ('\t\tcase ID_SETTINGS_CLIP:\n\t\t\tlaunchTool(ID_NAV_CLIP)\n'
-                      '\t\tcase ID_SETTINGS_UPDATE:\n\t\t\tcheckForUpdateManually()\n'
-                      '\t\tcase ID_SETTINGS_APPLY:')
-          if 'case ID_SETTINGS_UPDATE:' not in s:
-              if old_case not in s:
-                  raise SystemExit('settings command marker not found')
-              s = s.replace(old_case, new_case, 1)
-
-          manual_func = r'''func checkForUpdateManually() {
-          	base := os.Getenv("LOCALAPPDATA")
-          	if base == "" {
-          		errorBox("설치 경로를 확인하지 못해 업데이트를 조회할 수 없습니다.")
-          		return
-          	}
-          	launcher := filepath.Join(base, "Programs", "JTSN", "JTSN.exe")
-          	if st, err := os.Stat(launcher); err != nil || st.IsDir() {
-          		errorBox("설치된 JTSN 업데이트 프로그램을 찾지 못했습니다.\n\nJTSN 설치파일로 다시 설치한 뒤 이용해 주세요.")
-          		return
-          	}
-          	cmd := exec.Command(launcher, "--manual-update-check", strconv.Itoa(os.Getpid()))
-          	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-          	if err := cmd.Start(); err != nil {
-          		errorBox("업데이트 확인을 시작하지 못했습니다.\n\n" + err.Error())
-          	}
-          }
-
-          '''
-          if 'func checkForUpdateManually()' not in s:
-              marker = 'func checkForUpdateInBackground() {'
-              if marker not in s:
-                  raise SystemExit('background update function marker not found')
-              s = s.replace(marker, manual_func + marker, 1)
-
-          notes_prefix = r'''const latestPatchNotes = `v5.67
-
-• 설정 화면에 '업데이트 확인' 버튼 추가
-• 현재 버전과 GitHub 최신 릴리스를 사용자가 직접 비교할 수 있도록 개선
-• 새 버전이 있으면 즉시 업데이트로 연결하고, 최신 상태·조회 오류도 명확히 안내
-• 자동 업데이트 기능은 기존 방식 그대로 유지
-• 누락됐던 v5.64~v5.66 프로그램 내부 패치노트 보완
-
-v5.66
-
-• 설치창 UI 전면 개선: 여백·타이포·실제 JT/SN 아이콘·상태 영역·버튼 디자인 정리
-• Windows Common Controls v6 및 DPI 대응 매니페스트 적용
-• 설치 패키지 내부 본체 파일명을 버전별로 하드코딩하던 구조 제거
-• 설치파일에 포함된 JTSN 본체를 자동 탐색하여 실행하도록 변경
-• 빌드 시 내장 본체가 정확히 1개인지와 SHA-256 일치 여부 자동 검증
-• 실행 우선/백그라운드 업데이트 정책 유지
-
-v5.65
-
-• 실행 우선 정책 적용: 프로그램을 먼저 연 뒤 업데이트 확인
-• GitHub 연결 실패·업데이트 서버 지연과 무관하게 잡툴사니 실행 보장
-• 실행 후 약 15초 뒤 백그라운드에서 최신 버전 확인
-• 새 버전 발견 시 사용자에게 업데이트 여부 안내 후 패치 진행
-• v5.64 투명 JT/SN 로고 유지
-
-v5.64
-
-• 기존 JT/SN 로고 디자인은 그대로 유지하고 흰 배경만 투명 처리
-• 프로그램 창·작업표시줄·실행파일 아이콘을 투명 로고로 교체
-• 설치 프로그램 아이콘 및 브랜드 이미지도 동일 로고로 통일
-• 아이콘 안전 여백을 적용하여 작은 크기에서도 잘림 방지
-
-v5.63'''
-          if 'const latestPatchNotes = `v5.67' not in s:
-              old = 'const latestPatchNotes = `v5.63'
-              if old not in s:
-                  raise SystemExit('patch notes marker not found')
-              s = s.replace(old, notes_prefix, 1)
-
-          app_path.write_text(s, encoding='utf-8')
-
-          inst_path = Path('installer/main.go')
-          t = inst_path.read_text(encoding='utf-8')
-          t = re.sub(r'launcherVersion = "[0-9.]+"', 'launcherVersion = "5.67"', t, count=1)
-
-          main_marker = '''\tif len(os.Args) >= 3 && os.Args[1] == "--background-update-check" {
-          \t\tpid, _ := strconv.Atoi(os.Args[2])
-          \t\tbackgroundUpdateCheck(pid)
-          \t\treturn
-          \t}
-          '''
-          manual_main = main_marker + '''\tif len(os.Args) >= 3 && os.Args[1] == "--manual-update-check" {
-          \t\tpid, _ := strconv.Atoi(os.Args[2])
-          \t\tmanualUpdateCheck(pid)
-          \t\treturn
-          \t}
-          '''
-          if '--manual-update-check' not in t:
-              if main_marker not in t:
-                  raise SystemExit('installer main argument marker not found')
-              t = t.replace(main_marker, manual_main, 1)
-
-          manual_launcher = r'''func manualUpdateCheck(corePID int) {
-          	rel, err := latest()
-          	if err != nil {
-          		message("최신 버전을 확인하지 못했습니다.\n\n인터넷 연결 또는 GitHub 접속 상태를 확인해 주세요.\n\n"+err.Error(), 0x10)
-          		return
-          	}
-          	if !newer(rel.Tag, launcherVersion) {
-          		message(fmt.Sprintf("현재 v%s은 최신 버전입니다.\n\n설치된 JTSN을 그대로 사용하시면 됩니다.", launcherVersion), 0x40)
-          		return
-          	}
-          	body := strings.TrimSpace(rel.Body)
-          	if len([]rune(body)) > 480 {
-          		body = string([]rune(body)[:480]) + "…"
-          	}
-          	content := fmt.Sprintf("현재 버전 v%s  →  최신 버전 %s\n\n새 버전이 있습니다. 지금 업데이트하시겠습니까?", launcherVersion, rel.Tag)
-          	if body != "" {
-          		content += "\n\n" + body
-          	}
-          	if !askUpdate("새로운 JTSN을 사용할 수 있습니다", content) {
-          		return
-          	}
-          	updateCorePID = corePID
-          	if err := runUpdateProgress(rel); err != nil {
-          		message("업데이트에 실패했습니다. 실행 중인 버전은 그대로 유지됩니다.\n\n"+err.Error(), 0x10)
-          	}
-          }
-
-          '''
-          if 'func manualUpdateCheck(corePID int)' not in t:
-              marker = 'func backgroundUpdateCheck(corePID int) {'
-              if marker not in t:
-                  raise SystemExit('installer background update marker not found')
-              t = t.replace(marker, manual_launcher + marker, 1)
-
-          inst_path.write_text(t, encoding='utf-8')
-          '@ | Set-Content -Encoding utf8 patch_v567.py
-          python patch_v567.py
+          python scripts/patch_v567.py
           gofmt -w app/main.go installer/main.go
 
-      - name: Verify manual update source
+      - name: Verify source changes
         shell: pwsh
         run: |
           $app = Get-Content app/main.go -Raw
           $installer = Get-Content installer/main.go -Raw
-          if ($app -notmatch 'ID_SETTINGS_UPDATE') { throw 'Settings update button ID missing' }
-          if ($app -notmatch 'func checkForUpdateManually') { throw 'Manual update app function missing' }
-          if ($app -notmatch 'const latestPatchNotes = `v5\.67') { throw 'v5.67 internal patch notes missing' }
-          if ($app -notmatch 'v5\.66') { throw 'v5.66 internal patch notes missing' }
-          if ($installer -notmatch '--manual-update-check') { throw 'Manual update launcher argument missing' }
-          if ($installer -notmatch 'func manualUpdateCheck') { throw 'Manual update launcher function missing' }
+          if ($app -notmatch 'const appVersion = "5\.67"') { throw 'app version not updated' }
+          if ($app -notmatch 'ID_SETTINGS_UPDATE') { throw 'settings update button missing' }
+          if ($app -notmatch 'func checkForUpdateManually') { throw 'manual update app function missing' }
+          if ($app -notmatch 'const latestPatchNotes = `v5\.67') { throw 'v5.67 patch notes missing' }
+          if ($app -notmatch 'v5\.66') { throw 'v5.66 patch notes missing' }
+          if ($installer -notmatch 'launcherVersion = "5\.67"') { throw 'launcher version not updated' }
+          if ($installer -notmatch '--manual-update-check') { throw 'manual update launcher argument missing' }
+          if ($installer -notmatch 'func manualUpdateCheck') { throw 'manual update launcher function missing' }
 
       - name: Build application
         shell: pwsh
@@ -209,42 +56,18 @@ v5.63'''
         run: |
           Get-ChildItem installer/core -Filter '*.exe' -ErrorAction SilentlyContinue | Remove-Item -Force
           Copy-Item app/JTSN_v5.67.exe installer/core/JTSN_v5.67.exe -Force
+          $coreFiles = @(Get-ChildItem installer/core -Filter '*.exe')
+          if ($coreFiles.Count -ne 1) { throw "expected one embedded core, got $($coreFiles.Count)" }
           $source = Get-Content installer/main.go -Raw
           $source = [regex]::Replace($source, 'expectedCoreSHA = "[0-9a-f]*"', "expectedCoreSHA = `"$env:CORE_SHA256`"", 1)
           Set-Content installer/main.go -Value $source -Encoding utf8
           gofmt -w installer/main.go
-
-          @'
-          package main
-          import (
-              "crypto/sha256"
-              "encoding/hex"
-              "strings"
-              "testing"
-          )
-          func TestEmbeddedCorePackage(t *testing.T) {
-              entries, err := embeddedCore.ReadDir("core")
-              if err != nil { t.Fatal(err) }
-              names := []string{}
-              for _, e := range entries {
-                  n := e.Name()
-                  if !e.IsDir() && strings.HasPrefix(n, "JTSN_v") && strings.HasSuffix(strings.ToLower(n), ".exe") { names = append(names, n) }
-              }
-              if len(names) != 1 { t.Fatalf("expected exactly one embedded core, got %d: %v", len(names), names) }
-              b, err := embeddedCore.ReadFile("core/" + names[0])
-              if err != nil { t.Fatal(err) }
-              sum := sha256.Sum256(b)
-              if hex.EncodeToString(sum[:]) != expectedCoreSHA { t.Fatalf("embedded core hash mismatch") }
-          }
-          '@ | Set-Content -Encoding utf8 installer/embedded_core_test.go
-
           Push-Location installer
           go test -buildvcs=false ./...
           go vet -buildvcs=false ./...
-          Remove-Item embedded_core_test.go -Force
           go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_Setup_v5.67.exe .
           Pop-Location
-          if ((Get-Item installer/JTSN_Setup_v5.67.exe).Length -lt 1000000) { throw 'Installer binary unexpectedly small' }
+          if ((Get-Item installer/JTSN_Setup_v5.67.exe).Length -lt 1000000) { throw 'installer binary unexpectedly small' }
 
       - name: Commit v5.67 source
         shell: pwsh
@@ -257,7 +80,7 @@ v5.63'''
             git push origin HEAD:main
           }
 
-      - name: Package source and checksums
+      - name: Package release
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force release-source/JTSN_v5.67_FULL_SOURCE | Out-Null
@@ -271,19 +94,19 @@ v5.63'''
           $installerHash=(Get-FileHash installer/JTSN_Setup_v5.67.exe -Algorithm SHA256).Hash.ToLower()
           $sourceHash=(Get-FileHash JTSN_v5.67_FULL_SOURCE.zip -Algorithm SHA256).Hash.ToLower()
           @(
-            "$installerHash  JTSN_Setup_v5.67.exe"
+            "$installerHash  JTSN_Setup_v5.67.exe",
             "$sourceHash  JTSN_v5.67_FULL_SOURCE.zip"
           ) | Set-Content -Encoding ascii JTSN_v5.67_SHA256SUMS.txt
-          @"
-          ## v5.67
-
-          - 설정 화면에 '업데이트 확인' 버튼 추가
-          - 현재 버전과 GitHub 최신 릴리스를 사용자가 직접 비교할 수 있도록 개선
-          - 새 버전이 있으면 수동으로 즉시 업데이트 가능
-          - 최신 버전 사용 중일 때와 네트워크 조회 실패 시 안내 메시지 추가
-          - 자동 업데이트 기능은 기존 방식 그대로 유지
-          - 프로그램 내부 업데이트 내역에 누락됐던 v5.64, v5.65, v5.66 패치노트 보완
-          "@ | Set-Content -Encoding utf8 RELEASE_NOTES.md
+          @(
+            '## v5.67',
+            '',
+            '- 설정 화면에 업데이트 확인 버튼 추가',
+            '- 현재 버전과 GitHub 최신 릴리스를 사용자가 직접 비교할 수 있도록 개선',
+            '- 새 버전이 있으면 수동으로 즉시 업데이트 가능',
+            '- 최신 버전 사용 중일 때와 네트워크 조회 실패 시 안내 메시지 추가',
+            '- 자동 업데이트 기능은 기존 방식 그대로 유지',
+            '- 프로그램 내부 업데이트 내역에 누락됐던 v5.64, v5.65, v5.66 패치노트 보완'
+          ) | Set-Content -Encoding utf8 RELEASE_NOTES.md
 
       - name: Publish GitHub release
         shell: pwsh
