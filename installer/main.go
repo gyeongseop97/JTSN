@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	launcherVersion = "5.64"
+	launcherVersion = "5.65"
 	releaseAPI      = "https://api.github.com/repos/gyeongseop97/JTSN/releases/latest"
 	appFolderName   = "JTSN"
 	installedName   = "JTSN.exe"
@@ -104,9 +104,9 @@ var (
 
 type drawItemStruct struct {
 	CtlType, CtlID, ItemID, ItemAction, ItemState uint32
-	HwndItem, HDC                              uintptr
-	Left, Top, Right, Bottom                   int32
-	ItemData                                   uintptr
+	HwndItem, HDC                                 uintptr
+	Left, Top, Right, Bottom                      int32
+	ItemData                                      uintptr
 }
 
 func drawModernButton(lParam uintptr) bool {
@@ -124,7 +124,11 @@ func drawModernButton(lParam uintptr) bool {
 		fill, line, textColor = 0x00EF6F2E, 0x00EF6F2E, 0x00FFFFFF
 	}
 	if d.ItemState&odsSelected != 0 {
-		if primary { fill = 0x00D85B1D } else { fill = 0x00F4F1EE }
+		if primary {
+			fill = 0x00D85B1D
+		} else {
+			fill = 0x00F4F1EE
+		}
 	}
 	brush, _, _ := g.NewProc("CreateSolidBrush").Call(fill)
 	pen, _, _ := g.NewProc("CreatePen").Call(0, 1, line)
@@ -200,24 +204,8 @@ func main() {
 	if !ensureInstalled() {
 		return
 	}
-	if rel, err := latest(); err == nil && newer(rel.Tag, launcherVersion) {
-		body := strings.TrimSpace(rel.Body)
-		if len([]rune(body)) > 380 {
-			body = string([]rune(body)[:380]) + "…"
-		}
-		prompt := fmt.Sprintf("새 버전 %s을 사용할 수 있습니다.\n현재 버전: v%s", rel.Tag, launcherVersion)
-		if body != "" {
-			prompt += "\n\n" + body
-		}
-		prompt += "\n\n지금 업데이트할까요?"
-		if askUpdate(fmt.Sprintf("JTSN %s 업데이트", rel.Tag), strings.TrimPrefix(prompt, fmt.Sprintf("새 버전 %s을 사용할 수 있습니다.\n", rel.Tag))) {
-			if err := runUpdateProgress(rel); err == nil {
-				return
-			} else {
-				message("업데이트에 실패했습니다. 기존 버전을 실행합니다.\n\n"+err.Error(), 0x00000000|0x00000010)
-			}
-		}
-	}
+	// Launch-first policy: JTSN must open even when GitHub/update checks fail.
+	// The running core performs the update check shortly after startup.
 	launchCore()
 }
 
@@ -1079,4 +1067,3 @@ func launchCore() {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	_ = cmd.Start()
 }
-
