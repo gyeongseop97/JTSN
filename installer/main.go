@@ -28,7 +28,7 @@ const (
 	releaseAPI      = "https://api.github.com/repos/gyeongseop97/JTSN/releases/latest"
 	appFolderName   = "JTSN"
 	installedName   = "JTSN.exe"
-	expectedCoreSHA = "5e86dffacb23ca756c1b732468ea41c907dd19bf9ad082c20afa2a62a15a5d04"
+	expectedCoreSHA = "5d9f88926950ae354cc52e91b732661b8db11aa32fe4712b13f682bc051f7451"
 )
 
 //go:embed core/JTSN_v5.61.exe
