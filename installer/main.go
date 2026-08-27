@@ -28,7 +28,7 @@ const (
 	releaseAPI      = "https://api.github.com/repos/gyeongseop97/JTSN/releases/latest"
 	appFolderName   = "JTSN"
 	installedName   = "JTSN.exe"
-	expectedCoreSHA = "6235a379b4c321dd497132e7dd8fb756bfcb2aae296b657c47f39a010ae84bbc"
+	expectedCoreSHA = "3b622dc389c22f451d9df2e45c9009aac6cd1b93d113cd05326a43f40ec48d23"
 	wmAppUpdateExit = 0x8000 + 60
 )
 
