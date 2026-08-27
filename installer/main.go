@@ -24,11 +24,12 @@ import (
 )
 
 const (
-	launcherVersion = "5.61"
+	launcherVersion = "5.63"
 	releaseAPI      = "https://api.github.com/repos/gyeongseop97/JTSN/releases/latest"
 	appFolderName   = "JTSN"
 	installedName   = "JTSN.exe"
-	expectedCoreSHA = "5d9f88926950ae354cc52e91b732661b8db11aa32fe4712b13f682bc051f7451"
+	expectedCoreSHA = "5e86dffacb23ca756c1b732468ea41c907dd19bf9ad082c20afa2a62a15a5d04"
+	wmAppUpdateExit = 0x8000 + 60
 )
 
 //go:embed core/JTSN_v5.61.exe
@@ -61,6 +62,7 @@ const (
 	wmSetFont        = 0x0030
 	wmCtlColorEdit   = 0x0133
 	wmCtlColorStatic = 0x0138
+	wmDrawItem       = 0x002B
 	wmAppProgress    = 0x8001
 	wmAppDone        = 0x8002
 	wmUpdateStep     = 0x8003
@@ -71,6 +73,11 @@ const (
 	pbmSetBkColor    = 0x2001
 	idInstall        = 1001
 	idCancel         = 1002
+	bsOwnerDraw      = 0x0000000B
+	odsSelected      = 0x0001
+	dtCenter         = 0x0001
+	dtVCenter        = 0x0004
+	dtSingleLine     = 0x0020
 )
 
 var (
@@ -91,7 +98,51 @@ var (
 	updateMu       sync.Mutex
 	updateStatus   string
 	updateErr      error
+	updateCorePID  int
+	modernButtons  = map[uintptr]bool{}
 )
+
+type drawItemStruct struct {
+	CtlType, CtlID, ItemID, ItemAction, ItemState uint32
+	HwndItem, HDC                              uintptr
+	Left, Top, Right, Bottom                   int32
+	ItemData                                   uintptr
+}
+
+func drawModernButton(lParam uintptr) bool {
+	d := (*drawItemStruct)(unsafe.Pointer(lParam))
+	if d == nil || d.HDC == 0 {
+		return false
+	}
+	primary := modernButtons[d.HwndItem]
+	g := syscall.NewLazyDLL("gdi32.dll")
+	u := syscall.NewLazyDLL("user32.dll")
+	fill := uintptr(0x00FFFFFF)
+	line := uintptr(0x00DDD7D2)
+	textColor := uintptr(0x00483B32)
+	if primary {
+		fill, line, textColor = 0x00EF6F2E, 0x00EF6F2E, 0x00FFFFFF
+	}
+	if d.ItemState&odsSelected != 0 {
+		if primary { fill = 0x00D85B1D } else { fill = 0x00F4F1EE }
+	}
+	brush, _, _ := g.NewProc("CreateSolidBrush").Call(fill)
+	pen, _, _ := g.NewProc("CreatePen").Call(0, 1, line)
+	oldBrush, _, _ := g.NewProc("SelectObject").Call(d.HDC, brush)
+	oldPen, _, _ := g.NewProc("SelectObject").Call(d.HDC, pen)
+	g.NewProc("RoundRect").Call(d.HDC, uintptr(d.Left), uintptr(d.Top), uintptr(d.Right), uintptr(d.Bottom), 18, 18)
+	g.NewProc("SelectObject").Call(d.HDC, oldBrush)
+	g.NewProc("SelectObject").Call(d.HDC, oldPen)
+	g.NewProc("DeleteObject").Call(brush)
+	g.NewProc("DeleteObject").Call(pen)
+	g.NewProc("SetBkMode").Call(d.HDC, 1)
+	g.NewProc("SetTextColor").Call(d.HDC, textColor)
+	buf := make([]uint16, 128)
+	n, _, _ := u.NewProc("GetWindowTextW").Call(d.HwndItem, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	r := struct{ Left, Top, Right, Bottom int32 }{d.Left, d.Top, d.Right, d.Bottom}
+	u.NewProc("DrawTextW").Call(d.HDC, uintptr(unsafe.Pointer(&buf[0])), n, uintptr(unsafe.Pointer(&r)), dtCenter|dtVCenter|dtSingleLine)
+	return true
+}
 
 func p16(s string) *uint16 { p, _ := syscall.UTF16PtrFromString(s); return p }
 
@@ -120,6 +171,11 @@ func askUpdate(title, content string) bool {
 
 func main() {
 	runtime.LockOSThread()
+	if len(os.Args) >= 3 && os.Args[1] == "--background-update-check" {
+		pid, _ := strconv.Atoi(os.Args[2])
+		backgroundUpdateCheck(pid)
+		return
+	}
 	if len(os.Args) >= 4 && os.Args[1] == "--apply-update" {
 		applyUpdate(os.Args[2], os.Args[3])
 		return
@@ -163,6 +219,56 @@ func main() {
 		}
 	}
 	launchCore()
+}
+
+func updateSnoozePath() string {
+	base, err := os.UserCacheDir()
+	if err != nil {
+		base = os.TempDir()
+	}
+	return filepath.Join(base, "JTSN", "update_snooze.txt")
+}
+
+func updateSnoozed(tag string) bool {
+	b, err := os.ReadFile(updateSnoozePath())
+	if err != nil {
+		return false
+	}
+	parts := strings.SplitN(strings.TrimSpace(string(b)), "|", 2)
+	if len(parts) != 2 || parts[0] != tag {
+		return false
+	}
+	until, err := strconv.ParseInt(parts[1], 10, 64)
+	return err == nil && time.Now().Unix() < until
+}
+
+func snoozeUpdate(tag string) {
+	p := updateSnoozePath()
+	_ = os.MkdirAll(filepath.Dir(p), 0755)
+	_ = os.WriteFile(p, []byte(tag+"|"+strconv.FormatInt(time.Now().Add(6*time.Hour).Unix(), 10)), 0644)
+}
+
+func backgroundUpdateCheck(corePID int) {
+	rel, err := latest()
+	if err != nil || !newer(rel.Tag, launcherVersion) || updateSnoozed(rel.Tag) {
+		return
+	}
+	body := strings.TrimSpace(rel.Body)
+	if len([]rune(body)) > 320 {
+		body = string([]rune(body)[:320]) + "…"
+	}
+	content := fmt.Sprintf("현재 버전 v%s  →  최신 버전 %s\n\n최신 버전이 있습니다. 지금 업데이트하시겠습니까?", launcherVersion, rel.Tag)
+	if body != "" {
+		content += "\n\n" + body
+	}
+	if !askUpdate("새로운 JTSN을 사용할 수 있습니다", content) {
+		snoozeUpdate(rel.Tag)
+		return
+	}
+	updateCorePID = corePID
+	if err := runUpdateProgress(rel); err != nil {
+		message("업데이트에 실패했습니다. 실행 중인 버전은 그대로 유지됩니다.\n\n"+err.Error(), 0x10)
+	}
 }
 
 func cleanupUpdateBackup(path string) {
@@ -254,6 +360,10 @@ func runInstallWizard(self, want string) bool {
 
 	wndProc := syscall.NewCallback(func(hwnd uintptr, m uint32, wp, lp uintptr) uintptr {
 		switch m {
+		case wmDrawItem:
+			if drawModernButton(lp) {
+				return 1
+			}
 		case wmCtlColorStatic:
 			if lp == accentBar {
 				setBkColor.Call(wp, 0x00EF6F2E)
@@ -358,6 +468,8 @@ func runInstallWizard(self, want string) bool {
 		}
 		return copyFile(self, want) == nil
 	}
+	rgn, _, _ := gdi32.NewProc("CreateRoundRectRgn").Call(0, 0, 641, 411, 24, 24)
+	user32.NewProc("SetWindowRgn").Call(installerHWND, rgn, 1)
 
 	makeFont := func(height int, weight int) uintptr {
 		font, _, _ := gdi32.NewProc("CreateFontW").Call(^uintptr(height-1), 0, 0, 0, uintptr(weight), 0, 0, 0, 1, 0, 0, 5, 0, uintptr(unsafe.Pointer(p16("Segoe UI"))))
@@ -383,8 +495,10 @@ func runInstallWizard(self, want string) bool {
 	sendMessage.Call(progressHWND, pbmSetBarColor, 0, 0x00EF6F2E)
 	sendMessage.Call(progressHWND, pbmSetBkColor, 0, 0x00EEEAE6)
 	statusHWND = add("STATIC", "준비가 완료되었습니다. 설치를 눌러 시작하세요.", 0, 38, 274, 552, 28, 0, subFont)
-	installBtnHWND = add("BUTTON", "설치 시작", 0x00000001|0x00008000, 444, 322, 146, 42, idInstall, buttonFont)
-	cancelBtnHWND = add("BUTTON", "취소", 0x00008000, 326, 322, 106, 42, idCancel, buttonFont)
+	installBtnHWND = add("BUTTON", "설치 시작", bsOwnerDraw|0x00008000, 444, 322, 146, 42, idInstall, buttonFont)
+	cancelBtnHWND = add("BUTTON", "취소", bsOwnerDraw|0x00008000, 326, 322, 106, 42, idCancel, buttonFont)
+	modernButtons[installBtnHWND] = true
+	modernButtons[cancelBtnHWND] = false
 
 	user32.NewProc("ShowWindow").Call(installerHWND, 5)
 	user32.NewProc("UpdateWindow").Call(installerHWND)
@@ -514,6 +628,8 @@ func runUpdateProgress(r release) error {
 	if updateHWND == 0 {
 		return install(r, nil)
 	}
+	rgn, _, _ := gdi32.NewProc("CreateRoundRectRgn").Call(0, 0, 641, 331, 24, 24)
+	user32.NewProc("SetWindowRgn").Call(updateHWND, rgn, 1)
 
 	makeFont := func(height int, weight int) uintptr {
 		font, _, _ := gdi32.NewProc("CreateFontW").Call(^uintptr(height-1), 0, 0, 0, uintptr(weight), 0, 0, 0, 1, 0, 0, 5, 0, uintptr(unsafe.Pointer(p16("Segoe UI"))))
@@ -854,6 +970,16 @@ func install(r release, progress func(int, string)) error {
 		return err
 	}
 	report(97, "새 버전을 적용하고 있습니다...")
+	if updateCorePID > 0 {
+		// Ask the running core to terminate rather than hide to the tray. This is
+		// only sent after the user accepted and the new installer passed SHA-256.
+		u := syscall.NewLazyDLL("user32.dll")
+		hwnd, _, _ := u.NewProc("FindWindowW").Call(uintptr(unsafe.Pointer(p16("JTSNUtilityWindow"))), 0)
+		if hwnd != 0 {
+			u.NewProc("PostMessageW").Call(hwnd, wmAppUpdateExit, 0, 0)
+		}
+		waitProcess(uint32(updateCorePID), 15*time.Second)
+	}
 	self, err := os.Executable()
 	if err != nil {
 		return err
