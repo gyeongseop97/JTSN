@@ -1,4 +1,4 @@
-name: Build JTSN v5.62 UI Test
+name: Build JTSN v5.63 Update UI Test
 
 on:
   workflow_dispatch:
@@ -14,65 +14,41 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23.x'
-
-      - name: Build and verify v5.62 application
+      - name: Apply v5.63 test changes
+        run: git apply v5.63-update-ui.patch
+      - name: Build and verify application
         shell: pwsh
         working-directory: app
         run: |
           gofmt -w .
           go test -buildvcs=false ./...
           go vet -buildvcs=false ./...
-          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_v5.62.exe .
-          $coreHash=(Get-FileHash JTSN_v5.62.exe -Algorithm SHA256).Hash.ToLower()
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_v5.63.exe .
+          $coreHash=(Get-FileHash JTSN_v5.63.exe -Algorithm SHA256).Hash.ToLower()
           "CORE_SHA256=$coreHash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
-      - name: Prepare v5.62 installer source
+      - name: Prepare installer
         shell: pwsh
         run: |
-          Copy-Item app/JTSN_v5.62.exe installer/core/JTSN_v5.62.exe -Force
+          Copy-Item app/JTSN_v5.63.exe installer/core/JTSN_v5.63.exe -Force
           $source = Get-Content installer/main.go -Raw
-          $source = $source.Replace('launcherVersion = "5.61"', 'launcherVersion = "5.62"')
-          $source = $source.Replace('core/JTSN_v5.61.exe', 'core/JTSN_v5.62.exe')
+          $source = $source.Replace('core/JTSN_v5.61.exe', 'core/JTSN_v5.63.exe')
           $source = [regex]::Replace($source, 'expectedCoreSHA = "[0-9a-f]+"', "expectedCoreSHA = `"$env:CORE_SHA256`"")
           Set-Content installer/main.go -Value $source -Encoding utf8
-
-      - name: Build and verify single-file installer
+      - name: Build installer
         shell: pwsh
         working-directory: installer
         run: |
           gofmt -w main.go
           go test -buildvcs=false ./...
           go vet -buildvcs=false ./...
-          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_Setup_v5.62.exe .
-          $installerHash=(Get-FileHash JTSN_Setup_v5.62.exe -Algorithm SHA256).Hash.ToLower()
-          "$installerHash  JTSN_Setup_v5.62.exe" | Set-Content -Encoding ascii JTSN_Setup_v5.62.exe.sha256
-
-      - name: Package exact build source and checksums
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force release-source/JTSN_v5.62_FULL_SOURCE | Out-Null
-          Copy-Item app release-source/JTSN_v5.62_FULL_SOURCE/app -Recurse
-          Copy-Item installer release-source/JTSN_v5.62_FULL_SOURCE/installer -Recurse
-          Remove-Item release-source/JTSN_v5.62_FULL_SOURCE/app/JTSN_v5.62.exe -Force
-          Remove-Item release-source/JTSN_v5.62_FULL_SOURCE/installer/JTSN_Setup_v5.62.exe -Force
-          Remove-Item release-source/JTSN_v5.62_FULL_SOURCE/installer/JTSN_Setup_v5.62.exe.sha256 -Force
-          Get-ChildItem release-source/JTSN_v5.62_FULL_SOURCE/installer/core -Filter '*.exe' | Remove-Item -Force
-          Copy-Item .github release-source/JTSN_v5.62_FULL_SOURCE/.github -Recurse
-          Compress-Archive -Path release-source/JTSN_v5.62_FULL_SOURCE -DestinationPath JTSN_v5.62_FULL_SOURCE.zip
-          $sourceHash=(Get-FileHash JTSN_v5.62_FULL_SOURCE.zip -Algorithm SHA256).Hash.ToLower()
-          $installerHash=(Get-FileHash installer/JTSN_Setup_v5.62.exe -Algorithm SHA256).Hash.ToLower()
-          @(
-            "$installerHash  JTSN_Setup_v5.62.exe"
-            "$sourceHash  JTSN_v5.62_FULL_SOURCE.zip"
-          ) | Set-Content -Encoding ascii JTSN_v5.62_SHA256SUMS.txt
-
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_Setup_v5.63.exe .
+          $hash=(Get-FileHash JTSN_Setup_v5.63.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  JTSN_Setup_v5.63.exe" | Set-Content -Encoding ascii JTSN_Setup_v5.63.exe.sha256
       - uses: actions/upload-artifact@v4
         with:
-          name: JTSN-v5.62-ui-test
+          name: JTSN-v5.63-update-ui-test
           path: |
-            installer/JTSN_Setup_v5.62.exe
-            installer/JTSN_Setup_v5.62.exe.sha256
-            JTSN_v5.62_FULL_SOURCE.zip
-            JTSN_v5.62_SHA256SUMS.txt
+            installer/JTSN_Setup_v5.63.exe
+            installer/JTSN_Setup_v5.63.exe.sha256
           if-no-files-found: error
           retention-days: 7
