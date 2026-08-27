@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	launcherVersion = "5.65"
+	launcherVersion = "5.66"
 	releaseAPI      = "https://api.github.com/repos/gyeongseop97/JTSN/releases/latest"
 	appFolderName   = "JTSN"
 	installedName   = "JTSN.exe"
@@ -32,7 +32,7 @@ const (
 	wmAppUpdateExit = 0x8000 + 60
 )
 
-//go:embed core/JTSN_v5.61.exe
+//go:embed core/*.exe
 var embeddedCore embed.FS
 
 //go:embed assets/JTSN.ico
@@ -118,16 +118,17 @@ func drawModernButton(lParam uintptr) bool {
 	g := syscall.NewLazyDLL("gdi32.dll")
 	u := syscall.NewLazyDLL("user32.dll")
 	fill := uintptr(0x00FFFFFF)
-	line := uintptr(0x00DDD7D2)
-	textColor := uintptr(0x00483B32)
+	line := uintptr(0x00E4DED8)
+	textColor := uintptr(0x00443A32)
 	if primary {
 		fill, line, textColor = 0x00EF6F2E, 0x00EF6F2E, 0x00FFFFFF
 	}
 	if d.ItemState&odsSelected != 0 {
 		if primary {
 			fill = 0x00D85B1D
+			line = 0x00D85B1D
 		} else {
-			fill = 0x00F4F1EE
+			fill = 0x00F6F3F0
 		}
 	}
 	brush, _, _ := g.NewProc("CreateSolidBrush").Call(fill)
@@ -149,6 +150,23 @@ func drawModernButton(lParam uintptr) bool {
 }
 
 func p16(s string) *uint16 { p, _ := syscall.UTF16PtrFromString(s); return p }
+
+func loadInstallerBrandIcon(size int) uintptr {
+	if len(appIcon) == 0 {
+		return 0
+	}
+	dir := filepath.Join(os.TempDir(), "JTSN")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return 0
+	}
+	iconPath := filepath.Join(dir, "installer_brand.ico")
+	if err := os.WriteFile(iconPath, appIcon, 0644); err != nil {
+		return 0
+	}
+	u := syscall.NewLazyDLL("user32.dll")
+	h, _, _ := u.NewProc("LoadImageW").Call(0, uintptr(unsafe.Pointer(p16(iconPath))), 1, uintptr(size), uintptr(size), 0x0010)
+	return h
+}
 
 func message(text string, flags uintptr) uintptr {
 	u := syscall.NewLazyDLL("user32.dll")
@@ -341,10 +359,10 @@ func runInstallWizard(self, want string) bool {
 	brandBrush, _, _ := createBrush.Call(0x00EF6F2E)
 	headerBrush, _, _ := createBrush.Call(0x00FCFAF8)
 	whiteBrush, _, _ := createBrush.Call(0x00FFFFFF)
-	surfaceBrush, _, _ := createBrush.Call(0x00FAF7F4)
+	surfaceBrush, _, _ := createBrush.Call(0x00F8F6F3)
 	setTextColor := gdi32.NewProc("SetTextColor")
 	setBkColor := gdi32.NewProc("SetBkColor")
-	var headerBand, headerTitle, headerSub, accentBar, logoText uintptr
+	var headerBand, headerTitle, headerSub, accentBar, logoText, logoIconCtl uintptr
 
 	wndProc := syscall.NewCallback(func(hwnd uintptr, m uint32, wp, lp uintptr) uintptr {
 		switch m {
@@ -357,7 +375,7 @@ func runInstallWizard(self, want string) bool {
 				setBkColor.Call(wp, 0x00EF6F2E)
 				return brandBrush
 			}
-			if lp == headerBand || lp == headerTitle || lp == logoText {
+			if lp == headerBand || lp == headerTitle || lp == logoText || lp == logoIconCtl {
 				setTextColor.Call(wp, 0x0037291F)
 				setBkColor.Call(wp, 0x00FCFAF8)
 				if lp == logoText {
@@ -440,13 +458,14 @@ func runInstallWizard(self, want string) bool {
 	})
 
 	hInstance, _, _ := kernel32.NewProc("GetModuleHandleW").Call(0)
+	brandIcon := loadInstallerBrandIcon(64)
 	className := p16("JTSNInstallerWindow")
-	wc := wndClassEx{Size: uint32(unsafe.Sizeof(wndClassEx{})), WndProc: wndProc, Instance: hInstance, Background: 6, ClassName: uintptr(unsafe.Pointer(className))}
+	wc := wndClassEx{Size: uint32(unsafe.Sizeof(wndClassEx{})), WndProc: wndProc, Instance: hInstance, Icon: brandIcon, Background: 6, ClassName: uintptr(unsafe.Pointer(className)), IconSm: brandIcon}
 	user32.NewProc("RegisterClassExW").Call(uintptr(unsafe.Pointer(&wc)))
 
 	create := user32.NewProc("CreateWindowExW")
 	installerHWND, _, _ = create.Call(0, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(p16("JTSN 설치"))), 0x00CA0000,
-		uintptr(0x80000000), uintptr(0x80000000), 640, 410, 0, 0, hInstance, 0)
+		uintptr(0x80000000), uintptr(0x80000000), 720, 500, 0, 0, hInstance, 0)
 	if installerHWND == 0 {
 		if message("JTSN을 다음 위치에 설치합니다.\n\n"+filepath.Dir(want)+"\n\n설치하시겠습니까?", 0x24) != 6 {
 			return false
@@ -456,35 +475,42 @@ func runInstallWizard(self, want string) bool {
 		}
 		return copyFile(self, want) == nil
 	}
-	rgn, _, _ := gdi32.NewProc("CreateRoundRectRgn").Call(0, 0, 641, 411, 24, 24)
+	rgn, _, _ := gdi32.NewProc("CreateRoundRectRgn").Call(0, 0, 721, 501, 28, 28)
 	user32.NewProc("SetWindowRgn").Call(installerHWND, rgn, 1)
 
 	makeFont := func(height int, weight int) uintptr {
 		font, _, _ := gdi32.NewProc("CreateFontW").Call(^uintptr(height-1), 0, 0, 0, uintptr(weight), 0, 0, 0, 1, 0, 0, 5, 0, uintptr(unsafe.Pointer(p16("Segoe UI"))))
 		return font
 	}
-	bodyFont, titleFont, subFont, buttonFont, logoFont := makeFont(17, 400), makeFont(26, 700), makeFont(15, 400), makeFont(16, 600), makeFont(24, 800)
+	bodyFont, titleFont, subFont, buttonFont, labelFont := makeFont(16, 400), makeFont(30, 700), makeFont(15, 400), makeFont(16, 600), makeFont(14, 600)
 	add := func(class, text string, style uintptr, x, y, w, h int, id, font uintptr) uintptr {
 		child, _, _ := create.Call(0, uintptr(unsafe.Pointer(p16(class))), uintptr(unsafe.Pointer(p16(text))), style|0x40000000|0x10000000,
 			uintptr(x), uintptr(y), uintptr(w), uintptr(h), installerHWND, id, hInstance, 0)
 		sendMessage.Call(child, wmSetFont, font, 1)
 		return child
 	}
-	headerBand = add("STATIC", "", 0, 0, 0, 640, 108, 0, bodyFont)
-	accentBar = add("STATIC", "", 0, 0, 0, 8, 108, 0, bodyFont)
-	logoText = add("STATIC", "JT·SN", 0, 34, 31, 82, 34, 0, logoFont)
-	headerTitle = add("STATIC", "JTSN 설치", 0, 126, 24, 450, 36, 0, titleFont)
-	headerSub = add("STATIC", "잡툴사니를 빠르고 안전하게 준비합니다", 0, 127, 66, 450, 24, 0, subFont)
-	add("STATIC", "설치 위치", 0, 38, 132, 120, 24, 0, bodyFont)
-	add("EDIT", filepath.Dir(want), 0x00800800, 38, 160, 552, 34, 0, subFont)
-	add("STATIC", "설치 진행 상태", 0, 38, 218, 180, 24, 0, bodyFont)
-	progressHWND = add("msctls_progress32", "", 0, 38, 248, 552, 14, 0, bodyFont)
+	headerBand = add("STATIC", "", 0, 0, 0, 720, 122, 0, bodyFont)
+	logoIconCtl = add("STATIC", "", 0x00000003, 40, 27, 64, 64, 0, bodyFont)
+	if headerIcon := loadInstallerBrandIcon(56); headerIcon != 0 {
+		sendMessage.Call(logoIconCtl, 0x0170, headerIcon, 0)
+	}
+	headerTitle = add("STATIC", "잡툴사니 설치", 0, 124, 25, 500, 38, 0, titleFont)
+	headerSub = add("STATIC", "JTSN을 설치하고 자동 업데이트를 준비합니다", 0, 125, 68, 500, 24, 0, subFont)
+
+	add("STATIC", "설치 경로", 0, 42, 150, 120, 22, 0, labelFont)
+	add("EDIT", filepath.Dir(want), 0x00800800, 42, 177, 636, 38, 0, subFont)
+	add("STATIC", "기본 설치 위치이며, 설치 후 바탕화면 바로가기가 자동으로 생성됩니다.", 0, 42, 222, 636, 24, 0, subFont)
+
+	add("STATIC", "설치 상태", 0, 42, 270, 120, 22, 0, labelFont)
+	progressHWND = add("msctls_progress32", "", 0, 42, 299, 636, 12, 0, bodyFont)
 	sendMessage.Call(progressHWND, pbmSetRange32, 0, 100)
 	sendMessage.Call(progressHWND, pbmSetBarColor, 0, 0x00EF6F2E)
-	sendMessage.Call(progressHWND, pbmSetBkColor, 0, 0x00EEEAE6)
-	statusHWND = add("STATIC", "준비가 완료되었습니다. 설치를 눌러 시작하세요.", 0, 38, 274, 552, 28, 0, subFont)
-	installBtnHWND = add("BUTTON", "설치 시작", bsOwnerDraw|0x00008000, 444, 322, 146, 42, idInstall, buttonFont)
-	cancelBtnHWND = add("BUTTON", "취소", bsOwnerDraw|0x00008000, 326, 322, 106, 42, idCancel, buttonFont)
+	sendMessage.Call(progressHWND, pbmSetBkColor, 0, 0x00ECE8E4)
+	statusHWND = add("STATIC", "설치 준비가 완료되었습니다. 아래 버튼을 눌러 시작하세요.", 0, 42, 323, 636, 28, 0, subFont)
+	add("STATIC", "✓ 프로그램 파일 검증   ·   ✓ 자동 업데이트 지원   ·   ✓ 사용자 영역 설치", 0, 42, 361, 636, 24, 0, subFont)
+
+	cancelBtnHWND = add("BUTTON", "취소", bsOwnerDraw|0x00008000, 426, 411, 106, 44, idCancel, buttonFont)
+	installBtnHWND = add("BUTTON", "설치 시작", bsOwnerDraw|0x00008000, 544, 411, 134, 44, idInstall, buttonFont)
 	modernButtons[installBtnHWND] = true
 	modernButtons[cancelBtnHWND] = false
 
@@ -1039,7 +1065,28 @@ func copyFile(src, dst string) error {
 }
 
 func launchCore() {
-	b, err := embeddedCore.ReadFile("core/JTSN_v5.61.exe")
+	entries, err := embeddedCore.ReadDir("core")
+	if err != nil {
+		message("내장 JTSN 본체를 확인하지 못했습니다.\n\n"+err.Error(), 0x10)
+		return
+	}
+	coreName := ""
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, "JTSN_v") || !strings.HasSuffix(strings.ToLower(name), ".exe") {
+			continue
+		}
+		if coreName != "" {
+			message("설치 패키지 안에 JTSN 본체가 둘 이상 포함되어 있습니다.", 0x10)
+			return
+		}
+		coreName = name
+	}
+	if coreName == "" {
+		message("설치 패키지에서 JTSN 본체를 찾지 못했습니다.", 0x10)
+		return
+	}
+	b, err := embeddedCore.ReadFile("core/" + coreName)
 	if err != nil {
 		message(err.Error(), 0x10)
 		return
