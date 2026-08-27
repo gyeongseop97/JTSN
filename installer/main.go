@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	launcherVersion = "5.63"
+	launcherVersion = "5.64"
 	releaseAPI      = "https://api.github.com/repos/gyeongseop97/JTSN/releases/latest"
 	appFolderName   = "JTSN"
 	installedName   = "JTSN.exe"
@@ -1079,3 +1079,4 @@ func launchCore() {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	_ = cmd.Start()
 }
+

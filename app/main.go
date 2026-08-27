@@ -2070,7 +2070,7 @@ func resizeLauncher(hwnd syscall.Handle) {
 	procSetWindowPos.Call(uintptr(hwnd), 0, 0, 0, uintptr(w), uintptr(h), SWP_NOMOVE|SWP_NOZORDER)
 }
 
-const appVersion = "5.63"
+const appVersion = "5.64"
 
 const latestPatchNotes = `v5.63
 
@@ -6317,3 +6317,4 @@ func copyClipboard(s string) error {
 	}
 	return nil
 }
+
