@@ -1,4 +1,4 @@
-name: Build JTSN v5.61 UI Test
+name: Build JTSN v5.61 Release
 
 on:
   push:
@@ -17,26 +17,38 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23.x'
-      - name: Format and verify source
+      - name: Verify and build JTSN core
         shell: pwsh
         working-directory: app
         run: |
-          gofmt -w *.go
           go test -buildvcs=false ./...
           go vet -buildvcs=false ./...
-      - name: Build Windows GUI executable
+          New-Item -ItemType Directory -Force ../installer/core | Out-Null
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o ../installer/core/JTSN_v5.61.exe .
+          $coreHash=(Get-FileHash ../installer/core/JTSN_v5.61.exe -Algorithm SHA256).Hash.ToLower()
+          if ($coreHash -ne "5d9f88926950ae354cc52e91b732661b8db11aa32fe4712b13f682bc051f7451") {
+            throw "Unexpected core checksum: $coreHash"
+          }
+      - name: Build single-file installer
         shell: pwsh
-        working-directory: app
+        working-directory: installer
         run: |
-          New-Item -ItemType Directory -Force build | Out-Null
-          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o build/JTSN_v5.61_UI_TEST.exe .
-          $hash=(Get-FileHash build/JTSN_v5.61_UI_TEST.exe -Algorithm SHA256).Hash.ToLower()
-          "$hash  JTSN_v5.61_UI_TEST.exe" | Set-Content -Encoding ascii build/JTSN_v5.61_UI_TEST.sha256
+          go test -buildvcs=false ./...
+          New-Item -ItemType Directory -Force ../outputs | Out-Null
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o ../outputs/JTSN_Setup_v5.61.exe .
+          $hash=(Get-FileHash ../outputs/JTSN_Setup_v5.61.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  JTSN_Setup_v5.61.exe" | Set-Content -Encoding ascii ../outputs/JTSN_Setup_v5.61.exe.sha256
+      - name: Package full source
+        shell: pwsh
+        run: |
+          ./scripts/package-release.ps1 -Version 5.61
       - uses: actions/upload-artifact@v4
         with:
-          name: JTSN-v5.61-UI-test
+          name: JTSN-v5.61-release
           path: |
-            app/build/JTSN_v5.61_UI_TEST.exe
-            app/build/JTSN_v5.61_UI_TEST.sha256
+            outputs/JTSN_Setup_v5.61.exe
+            outputs/JTSN_Setup_v5.61.exe.sha256
+            outputs/JTSN_v5.61_FULL_SOURCE.zip
+            outputs/JTSN_v5.61_SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
