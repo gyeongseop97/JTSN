@@ -1,0 +1,141 @@
+name: Publish JTSN v5.65 Launch First Hotfix
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.hotfix/release-v5.65.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+
+      - name: Patch launcher to always launch core first
+        shell: pwsh
+        run: |
+          $path = 'installer/main.go'
+          $src = Get-Content $path -Raw
+
+          # Normal startup must never depend on network/update availability.
+          # Replace the whole synchronous pre-launch update block with launchCore().
+          $pattern = '(?s)\tif !ensureInstalled\(\) \{\s*\t\treturn\s*\t\}\s*\tif rel, err := latest\(\);.*?\s*\tlaunchCore\(\)\s*\}'
+          $replacement = @"
+          `tif !ensureInstalled() {
+          `t`treturn
+          `t}
+          `t// Launch-first policy: JTSN must open even when GitHub/update checks fail.
+          `t// The running core performs the update check shortly after startup.
+          `tlaunchCore()
+          }
+          "@
+          $new = [regex]::Replace($src, $pattern, $replacement, 1)
+          if ($new -eq $src) { throw 'Failed to patch launcher main() launch-first flow' }
+
+          $new = [regex]::Replace($new, 'launcherVersion = "[0-9.]+"', 'launcherVersion = "5.65"', 1)
+          Set-Content $path -Value $new -Encoding utf8
+
+          $appPath = 'app/main.go'
+          $app = Get-Content $appPath -Raw
+          $app = [regex]::Replace($app, 'const appVersion = "[0-9.]+"', 'const appVersion = "5.65"', 1)
+          Set-Content $appPath -Value $app -Encoding utf8
+
+          gofmt -w installer/main.go app/main.go
+
+      - name: Verify launch-first source behavior
+        shell: pwsh
+        run: |
+          $src = Get-Content installer/main.go -Raw
+          if ($src -match 'if rel, err := latest\(\); err == nil && newer\(rel.Tag, launcherVersion\)') {
+            throw 'Synchronous startup update check still exists'
+          }
+          if ($src -notmatch 'Launch-first policy') { throw 'Launch-first marker missing' }
+          if ($src -notmatch 'launchCore\(\)') { throw 'launchCore call missing' }
+
+      - name: Commit hotfix source to main
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add installer/main.go app/main.go
+          if (-not (git diff --cached --quiet)) {
+            git commit -m 'Fix startup: launch JTSN before checking for updates'
+            git push origin HEAD:main
+          }
+
+      - name: Build application
+        shell: pwsh
+        working-directory: app
+        run: |
+          gofmt -w .
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_v5.65.exe .
+          $coreHash=(Get-FileHash JTSN_v5.65.exe -Algorithm SHA256).Hash.ToLower()
+          "CORE_SHA256=$coreHash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          Copy-Item app/JTSN_v5.65.exe installer/core/JTSN_v5.65.exe -Force
+          $source = Get-Content installer/main.go -Raw
+          $source = [regex]::Replace($source, 'core/JTSN_v[0-9.]+\.exe', 'core/JTSN_v5.65.exe', 1)
+          $source = [regex]::Replace($source, 'expectedCoreSHA = "[0-9a-f]+"', "expectedCoreSHA = `"$env:CORE_SHA256`"")
+          Set-Content installer/main.go -Value $source -Encoding utf8
+          Push-Location installer
+          gofmt -w main.go
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_Setup_v5.65.exe .
+          Pop-Location
+
+      - name: Startup smoke tests
+        shell: pwsh
+        run: |
+          # Installer/core binaries must exist and be non-trivial.
+          if ((Get-Item app/JTSN_v5.65.exe).Length -lt 1000000) { throw 'Core binary unexpectedly small' }
+          if ((Get-Item installer/JTSN_Setup_v5.65.exe).Length -lt 1000000) { throw 'Installer binary unexpectedly small' }
+
+      - name: Package source and checksums
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release-source/JTSN_v5.65_FULL_SOURCE | Out-Null
+          Copy-Item app release-source/JTSN_v5.65_FULL_SOURCE/app -Recurse
+          Copy-Item installer release-source/JTSN_v5.65_FULL_SOURCE/installer -Recurse
+          Remove-Item release-source/JTSN_v5.65_FULL_SOURCE/app/JTSN_v5.65.exe -Force
+          Remove-Item release-source/JTSN_v5.65_FULL_SOURCE/installer/JTSN_Setup_v5.65.exe -Force
+          Get-ChildItem release-source/JTSN_v5.65_FULL_SOURCE/installer/core -Filter '*.exe' | Remove-Item -Force
+          Copy-Item .github release-source/JTSN_v5.65_FULL_SOURCE/.github -Recurse
+          Compress-Archive -Path release-source/JTSN_v5.65_FULL_SOURCE -DestinationPath JTSN_v5.65_FULL_SOURCE.zip
+          $installerHash=(Get-FileHash installer/JTSN_Setup_v5.65.exe -Algorithm SHA256).Hash.ToLower()
+          $sourceHash=(Get-FileHash JTSN_v5.65_FULL_SOURCE.zip -Algorithm SHA256).Hash.ToLower()
+          @(
+            "$installerHash  JTSN_Setup_v5.65.exe"
+            "$sourceHash  JTSN_v5.65_FULL_SOURCE.zip"
+          ) | Set-Content -Encoding ascii JTSN_v5.65_SHA256SUMS.txt
+          @"
+          ## v5.65
+
+          - 실행 우선 정책 적용: 프로그램을 먼저 연 뒤 업데이트 확인
+          - GitHub 연결 실패·업데이트 서버 지연과 무관하게 잡툴사니 실행 보장
+          - 실행 후 약 15초 뒤 백그라운드에서 최신 버전 확인
+          - 새 버전 발견 시 사용자에게 업데이트 여부 안내 후 패치 진행
+          - v5.64 투명 JT/SN 로고 유지
+          "@ | Set-Content -Encoding utf8 RELEASE_NOTES.md
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v5.65 installer/JTSN_Setup_v5.65.exe JTSN_v5.65_FULL_SOURCE.zip JTSN_v5.65_SHA256SUMS.txt --target main --title "JTSN v5.65" --notes-file RELEASE_NOTES.md --latest
