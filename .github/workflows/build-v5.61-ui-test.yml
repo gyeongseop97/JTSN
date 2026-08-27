@@ -19,8 +19,7 @@ jobs:
         shell: pwsh
         working-directory: app
         run: |
-          $formatted = gofmt -l .
-          if ($formatted) { throw "gofmt required: $formatted" }
+          gofmt -w .
           go test -buildvcs=false ./...
           go vet -buildvcs=false ./...
           go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_v5.62.exe .
