@@ -84,7 +84,6 @@ const (
 	ES_AUTOHSCROLL = 0x0080
 	ES_WANTRETURN  = 0x1000
 	EM_SETMARGINS  = 0x00D3
-	EM_SETSEL      = 0x00B1
 	EC_LEFTMARGIN  = 0x0001
 	EC_RIGHTMARGIN = 0x0002
 
@@ -93,7 +92,6 @@ const (
 	CBN_KILLFOCUS    = 4
 	EN_SETFOCUS      = 0x0100
 	EN_KILLFOCUS     = 0x0200
-	EN_CHANGE        = 0x0300
 
 	WM_CREATE           = 0x0001
 	WM_DESTROY          = 0x0002
@@ -113,6 +111,7 @@ const (
 	WM_CAPTURECHANGED   = 0x0215
 	WM_TIMER            = 0x0113
 	WM_MOUSELEAVE       = 0x02A3
+	WM_DPICHANGED       = 0x02E0
 	WM_CTLCOLORSTATIC   = 0x0138
 	WM_CTLCOLOREDIT     = 0x0133
 	WM_APP              = 0x8000
@@ -157,7 +156,6 @@ const (
 	VK_ESCAPE           = 0x1B
 	VK_DELETE           = 0x2E
 	ID_TIMER_EYEDROPPER = 9101
-	ID_TIMER_SEARCH     = 9102
 
 	MB_OK              = 0x00000000
 	MB_ICONINFORMATION = 0x00000040
@@ -231,7 +229,6 @@ const (
 	ID_LAUNCH_EDIT          = 630
 	ID_LAUNCH_ADD           = 632
 	ID_LAUNCH_CANCEL        = 633
-	ID_LAUNCH_SEARCH        = 634
 	ID_FAV_REMOVE_BASE      = 6700
 	ID_RECENT_CLEAR         = 631
 	ID_SETTINGS_STANDARD    = 640
@@ -303,7 +300,6 @@ const (
 
 type POINT struct{ X, Y int32 }
 type RECT struct{ Left, Top, Right, Bottom int32 }
-type MARGINS struct{ Left, Right, Top, Bottom int32 }
 type NMHDR struct {
 	HwndFrom syscall.Handle
 	IDFrom   uintptr
@@ -497,13 +493,11 @@ var (
 	winspool = syscall.NewLazyDLL("winspool.drv")
 	comctl32 = syscall.NewLazyDLL("comctl32.dll")
 	uxtheme  = syscall.NewLazyDLL("uxtheme.dll")
-	dwmapi   = syscall.NewLazyDLL("dwmapi.dll")
 
 	procRegisterClassExW              = user32.NewProc("RegisterClassExW")
 	procCreateWindowExW               = user32.NewProc("CreateWindowExW")
 	procDefWindowProcW                = user32.NewProc("DefWindowProcW")
 	procShowWindow                    = user32.NewProc("ShowWindow")
-	procSetFocus                      = user32.NewProc("SetFocus")
 	procUpdateWindow                  = user32.NewProc("UpdateWindow")
 	procGetMessageW                   = user32.NewProc("GetMessageW")
 	procTranslateMessage              = user32.NewProc("TranslateMessage")
@@ -603,12 +597,10 @@ var (
 	procOleInitialize        = ole32.NewProc("OleInitialize")
 	procOleUninitialize      = ole32.NewProc("OleUninitialize")
 
-	procEnumPrintersW         = winspool.NewProc("EnumPrintersW")
-	procGetDefaultPrinterW    = winspool.NewProc("GetDefaultPrinterW")
-	procInitCommonControlsEx  = comctl32.NewProc("InitCommonControlsEx")
-	procSetWindowTheme        = uxtheme.NewProc("SetWindowTheme")
-	procDwmSetWindowAttribute = dwmapi.NewProc("DwmSetWindowAttribute")
-	procDwmExtendFrame        = dwmapi.NewProc("DwmExtendFrameIntoClientArea")
+	procEnumPrintersW        = winspool.NewProc("EnumPrintersW")
+	procGetDefaultPrinterW   = winspool.NewProc("GetDefaultPrinterW")
+	procInitCommonControlsEx = comctl32.NewProc("InitCommonControlsEx")
+	procSetWindowTheme       = uxtheme.NewProc("SetWindowTheme")
 )
 
 //go:embed jtsn.ico
@@ -702,13 +694,9 @@ var launchOwner RECT
 var launchOwnerValid bool
 var customMaximized bool
 var customRestoreRect RECT
-var customRestoreMini bool
-var customRestoreCompact bool
 var launcherLayoutWidth int32
+var launcherLayoutHeight int32
 var launcherBuilt bool
-var launcherSearchHandle syscall.Handle
-var launcherSearchQuery string
-var launcherSearchRebuilding bool
 var mailMu sync.Mutex
 var statusMailbox string
 var progressMailbox int
@@ -782,7 +770,9 @@ func main() {
 	hInst, _, _ := procGetModuleHandleW.Call(0)
 	className := p16("JTSNUtilityWindow")
 	cursor, _, _ := user32.NewProc("LoadCursorW").Call(0, 32512)
-	brushBg = solidBrush(250, 250, 249)
+	// A single white base prevents grey rectangles from showing behind labels
+	// and in the square corners of owner-drawn rounded buttons.
+	brushBg = solidBrush(255, 255, 255)
 	brushPanel = solidBrush(255, 255, 255)
 	brushSidebar = solidBrush(255, 255, 255)
 	appIconBig, appIconSmall, appIconBrand = loadEmbeddedAppIcons()
@@ -851,7 +841,6 @@ func main() {
 		topExStyle = 0
 	}
 	mainHWND = createWindow(topExStyle, "JTSNUtilityWindow", title, windowStyle, x, y, w, h, 0, 0)
-	enableNativeWindowShadow(mainHWND)
 	if appIconBig != 0 {
 		procSendMessageW.Call(uintptr(mainHWND), WM_SETICON, ICON_BIG, uintptr(appIconBig))
 	}
@@ -982,6 +971,7 @@ func launchTool(id int) {
 	}
 }
 
+//go:nocheckptr
 func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 	if launchMode != "" && currentTool == ID_NAV_PDF {
 		if handled, ret := pdfWindowMessage(hwnd, msg, wParam, lParam); handled {
@@ -1009,9 +999,18 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 		if launchMode == "" && launcherBuilt {
 			var client RECT
 			procGetClientRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&client)))
-			if client.Right != launcherLayoutWidth {
+			if client.Right != launcherLayoutWidth || client.Bottom != launcherLayoutHeight {
 				rebuildLauncher(hwnd)
 			}
+		}
+		return 0
+	case WM_DPICHANGED:
+		if lParam != 0 {
+			r := (*RECT)(winPtr(lParam))
+			procSetWindowPos.Call(uintptr(hwnd), 0, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right-r.Left), uintptr(r.Bottom-r.Top), SWP_NOZORDER)
+		}
+		if launchMode == "" && launcherBuilt {
+			rebuildLauncher(hwnd)
 		}
 		return 0
 	case WM_ERASEBKGND:
@@ -1034,7 +1033,7 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 		paintWindow(hwnd)
 		return 0
 	case WM_DRAWITEM:
-		dis := (*DRAWITEMSTRUCT)(unsafe.Pointer(lParam))
+		dis := (*DRAWITEMSTRUCT)(winPtr(lParam))
 		if dis != nil && dis.HwndItem != 0 {
 			if kind, ok := buttonKinds[dis.HwndItem]; ok {
 				drawOwnerButton(dis, kind)
@@ -1132,7 +1131,7 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 				}
 				return 0
 			}
-			if x >= client.Right-96 {
+			if launchMode == "" && x >= client.Right-96 {
 				toggleCustomMaximize(hwnd)
 				return 0
 			}
@@ -1146,11 +1145,6 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			return 0
 		}
 	case WM_TIMER:
-		if wParam == ID_TIMER_SEARCH && launchMode == "" {
-			procKillTimer.Call(uintptr(hwnd), ID_TIMER_SEARCH)
-			rebuildLauncher(hwnd)
-			return 0
-		}
 		if launchMode == "" && hotkeyTimer(hwnd, wParam) {
 			return 0
 		}
@@ -1175,7 +1169,7 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			return clipNotifyResult
 		}
 		if currentTool == ID_NAV_DUP && lParam != 0 {
-			nm := (*NMLISTVIEW)(unsafe.Pointer(lParam))
+			nm := (*NMLISTVIEW)(winPtr(lParam))
 			if nm.Hdr.HwndFrom == duplicateList && nm.Hdr.Code == LVN_COLUMNCLICK {
 				sortDuplicateRows(int(nm.ISubItem))
 				return 0
@@ -1208,10 +1202,6 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 		}
 		if launchMode == "" {
 			switch {
-			case id == ID_LAUNCH_SEARCH && notify == EN_CHANGE && !launcherSearchRebuilding:
-				launcherSearchQuery = strings.TrimSpace(getText(ctl))
-				procKillTimer.Call(uintptr(hwnd), ID_TIMER_SEARCH)
-				procSetTimer.Call(uintptr(hwnd), ID_TIMER_SEARCH, 180, 0)
 			case id >= ID_FAV_REMOVE_BASE+ID_NAV_PRINT && id <= ID_FAV_REMOVE_BASE+ID_NAV_OCR:
 				removeInlineFavorite(id - ID_FAV_REMOVE_BASE)
 			case id >= ID_NAV_PRINT && id <= ID_NAV_OCR:
@@ -1387,20 +1377,18 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 func initFonts() {
 	fontNormal = createFont(-17, 400, "Noto Sans KR")
 	fontSmall = createFont(-14, 400, "Noto Sans KR")
+	// Heavy synthetic weights on the embedded variable font caused Korean
+	// strokes to merge. Native medium/semi-bold weights remain crisp in GDI.
 	fontButton = createFont(-16, 500, "Noto Sans KR")
 	fontTitle = createFont(-28, 600, "Noto Sans KR")
 	fontApp = createFont(-22, 600, "Noto Sans KR")
 	fontLauncherTitle = createFont(-25, 600, "Noto Sans KR")
 	fontLauncherSection = createFont(-19, 600, "Noto Sans KR")
 	fontLauncherCard = createFont(-17, 500, "Noto Sans KR")
-	fontLauncherSide = createFont(-16, 450, "Noto Sans KR")
+	fontLauncherSide = createFont(-16, 500, "Noto Sans KR")
 }
 func createFont(height int32, weight uintptr, face string) syscall.Handle {
-	// Force the embedded TrueType face and natural ClearType rasterization.
-	// Leaving output precision at the GDI default can select a synthesized
-	// bitmap strike at some DPI values, which makes medium/bold Korean glyphs
-	// look jagged or clogged.
-	h, _, _ := procCreateFontW.Call(uintptr(height), 0, 0, 0, weight, 0, 0, 0, 1, 4, 0, 6, 0, uintptr(unsafe.Pointer(p16(face))))
+	h, _, _ := procCreateFontW.Call(uintptr(height), 0, 0, 0, weight, 0, 0, 0, 1, 0, 0, 6, 0, uintptr(unsafe.Pointer(p16(face))))
 	return syscall.Handle(h)
 }
 func solidBrush(r, g, b byte) syscall.Handle {
@@ -1474,7 +1462,7 @@ func paintWindowFrame(hwnd syscall.Handle, hdc uintptr, client RECT) {
 	client.Bottom -= APP_CHROME_HEIGHT
 
 	if launchMode == "" {
-		if launcherCompact {
+		if launcherCompact && !customMaximized {
 			body := RECT{0, 0, client.Right, client.Bottom}
 			procFillRect.Call(hdc, uintptr(unsafe.Pointer(&body)), uintptr(brushPanel))
 			rail := RECT{0, 0, 70, client.Bottom}
@@ -1492,7 +1480,7 @@ func paintWindowFrame(hwnd syscall.Handle, hdc uintptr, client RECT) {
 			}
 			return
 		}
-		if launcherMini {
+		if launcherMini && !customMaximized {
 			body := RECT{0, 0, client.Right, client.Bottom}
 			procFillRect.Call(hdc, uintptr(unsafe.Pointer(&body)), uintptr(brushPanel))
 			footerY := client.Bottom - 44
@@ -1529,13 +1517,6 @@ func paintWindowFrame(hwnd syscall.Handle, hdc uintptr, client RECT) {
 		procLineTo.Call(hdc, uintptr(client.Right), uintptr(footerY))
 		procSelectObject.Call(hdc, oldFooter)
 		procDeleteObject.Call(footerPen)
-		if !launcherFavoriteEditing && launcherSearchHandle != 0 {
-			searchBorder := rgb(203, 213, 225)
-			if focusedControl == launcherSearchHandle {
-				searchBorder = rgb(74, 118, 245)
-			}
-			drawSoftCard(syscall.Handle(hdc), RECT{client.Right - 358, 23, client.Right - 126, 63}, 12, searchBorder, rgb(255, 255, 255))
-		}
 
 		drawLauncherBrand(syscall.Handle(hdc))
 		return
@@ -1593,12 +1574,36 @@ func drawAppChrome(hdc syscall.Handle, client RECT) {
 	}
 	drawSettingsText(hdc, title, RECT{45, 2, client.Right - 152, APP_CHROME_HEIGHT - 1}, fontButton, rgb(15, 23, 42))
 	drawChromeGlyph(hdc, "—", RECT{client.Right - 144, 0, client.Right - 96, APP_CHROME_HEIGHT - 1})
-	maxGlyph := "□"
-	if customMaximized {
-		maxGlyph = "❐"
+	if launchMode == "" {
+		drawChromeMaximize(hdc, RECT{client.Right - 96, 0, client.Right - 48, APP_CHROME_HEIGHT - 1}, customMaximized)
 	}
-	drawChromeGlyph(hdc, maxGlyph, RECT{client.Right - 96, 0, client.Right - 48, APP_CHROME_HEIGHT - 1})
 	drawChromeGlyph(hdc, "×", RECT{client.Right - 48, 0, client.Right, APP_CHROME_HEIGHT - 1})
+}
+
+func drawChromeMaximize(hdc syscall.Handle, rc RECT, restored bool) {
+	// Device-pixel geometry stays sharp when maximized; the former Unicode
+	// restore glyph depended on font fallback and was clipped at some DPIs.
+	pen, _, _ := procCreatePen.Call(PS_SOLID, 1, rgb(71, 85, 105))
+	old, _, _ := procSelectObject.Call(uintptr(hdc), pen)
+	cx, cy := (rc.Left+rc.Right)/2, (rc.Top+rc.Bottom)/2
+	if restored {
+		procMoveToEx.Call(uintptr(hdc), uintptr(cx-4), uintptr(cy-5), 0)
+		procLineTo.Call(uintptr(hdc), uintptr(cx+5), uintptr(cy-5))
+		procLineTo.Call(uintptr(hdc), uintptr(cx+5), uintptr(cy+4))
+		procMoveToEx.Call(uintptr(hdc), uintptr(cx-6), uintptr(cy-3), 0)
+		procLineTo.Call(uintptr(hdc), uintptr(cx+3), uintptr(cy-3))
+		procLineTo.Call(uintptr(hdc), uintptr(cx+3), uintptr(cy+6))
+		procLineTo.Call(uintptr(hdc), uintptr(cx-6), uintptr(cy+6))
+		procLineTo.Call(uintptr(hdc), uintptr(cx-6), uintptr(cy-3))
+	} else {
+		procMoveToEx.Call(uintptr(hdc), uintptr(cx-6), uintptr(cy-6), 0)
+		procLineTo.Call(uintptr(hdc), uintptr(cx+6), uintptr(cy-6))
+		procLineTo.Call(uintptr(hdc), uintptr(cx+6), uintptr(cy+6))
+		procLineTo.Call(uintptr(hdc), uintptr(cx-6), uintptr(cy+6))
+		procLineTo.Call(uintptr(hdc), uintptr(cx-6), uintptr(cy-6))
+	}
+	procSelectObject.Call(uintptr(hdc), old)
+	procDeleteObject.Call(pen)
 }
 
 func drawChromeGlyph(hdc syscall.Handle, glyph string, rc RECT) {
@@ -1612,31 +1617,12 @@ func drawChromeGlyph(hdc syscall.Handle, glyph string, rc RECT) {
 func toggleCustomMaximize(hwnd syscall.Handle) {
 	if customMaximized {
 		r := customRestoreRect
-		customMaximized = false
-		if launchMode == "" {
-			launcherMini = customRestoreMini
-			launcherCompact = customRestoreCompact
-		}
 		procSetWindowPos.Call(uintptr(hwnd), 0, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right-r.Left), uintptr(r.Bottom-r.Top), 0)
-		if launchMode == "" {
-			rebuildLauncher(hwnd)
-		}
+		customMaximized = false
 		procInvalidateRect.Call(uintptr(hwnd), 0, 0)
 		return
 	}
 	procGetWindowRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&customRestoreRect)))
-	if launchMode == "" {
-		customRestoreMini = launcherMini
-		customRestoreCompact = launcherCompact
-		// Mini and compact layouts are fixed-size modes. Maximizing them as-is
-		// leaves their controls stranded in the middle of a large blank canvas.
-		// Use the responsive standard dashboard while maximized, then restore the
-		// user's selected mode with the original window bounds.
-		if launcherMini || launcherCompact {
-			launcherMini = false
-			launcherCompact = false
-		}
-	}
 	monitor, _, _ := procMonitorFromWindow.Call(uintptr(hwnd), 2) // nearest monitor
 	mi := MONITORINFO{CbSize: uint32(unsafe.Sizeof(MONITORINFO{}))}
 	if monitor != 0 {
@@ -1644,9 +1630,6 @@ func toggleCustomMaximize(hwnd syscall.Handle) {
 			r := mi.RcWork
 			customMaximized = true
 			procSetWindowPos.Call(uintptr(hwnd), 0, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right-r.Left), uintptr(r.Bottom-r.Top), 0)
-			if launchMode == "" {
-				rebuildLauncher(hwnd)
-			}
 			return
 		}
 	}
@@ -1662,22 +1645,6 @@ func drawSoftCard(hdc syscall.Handle, rc RECT, radius int, borderColor, fillColo
 	procSelectObject.Call(uintptr(hdc), oldP)
 	procDeleteObject.Call(uintptr(brush))
 	procDeleteObject.Call(pen)
-}
-
-// Frameless popup windows do not consistently receive the normal Windows 11
-// compositor shadow. Enabling non-client rendering and extending a one-pixel
-// glass frame restores the wide native shadow without creating a separate
-// helper window that can leave a ghost behind after close or minimize.
-func enableNativeWindowShadow(hwnd syscall.Handle) {
-	if hwnd == 0 {
-		return
-	}
-	policy := int32(2) // DWMNCRP_ENABLED
-	procDwmSetWindowAttribute.Call(uintptr(hwnd), 2, uintptr(unsafe.Pointer(&policy)), unsafe.Sizeof(policy))
-	corner := int32(2) // DWMWCP_ROUND
-	procDwmSetWindowAttribute.Call(uintptr(hwnd), 33, uintptr(unsafe.Pointer(&corner)), unsafe.Sizeof(corner))
-	margins := MARGINS{Left: 1, Right: 1, Top: 1, Bottom: 1}
-	procDwmExtendFrame.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&margins)))
 }
 
 func drawLauncherBrand(hdc syscall.Handle) {
@@ -1911,9 +1878,6 @@ func launcherCategoryTitle() string {
 }
 
 func launcherToolsForCategory() []int {
-	if strings.TrimSpace(launcherSearchQuery) != "" {
-		return filterLauncherTools(launcherSearchQuery)
-	}
 	switch launcherCategory {
 	case ID_SIDE_PDF:
 		return []int{ID_NAV_PDF}
@@ -1928,29 +1892,6 @@ func launcherToolsForCategory() []int {
 	default:
 		return loadLauncherFavorites()
 	}
-}
-
-func filterLauncherTools(query string) []int {
-	q := strings.ToLower(strings.TrimSpace(query))
-	if q == "" {
-		return allLauncherTools()
-	}
-	aliases := map[int]string{
-		ID_NAV_PRINT: "인쇄 프린트 출력 print", ID_NAV_PDF: "pdf 합치기 분할 변환",
-		ID_NAV_RENAME: "이름 변경 rename", ID_NAV_FOLDERS: "폴더 생성 directory",
-		ID_NAV_DUP: "중복 파일 duplicate", ID_NAV_IMAGE: "이미지 사진 변환 resize",
-		ID_NAV_COLOR: "색상 컬러 스포이드 hex rgb", ID_NAV_TEXT: "텍스트 글자 정리 text",
-		ID_NAV_CLIP: "클립보드 복사 붙여넣기 clipboard", ID_NAV_BUNDLE: "묶기 새 폴더 이동",
-		ID_NAV_OCR: "ocr 화면 글자 추출 인식",
-	}
-	var out []int
-	for _, id := range allLauncherTools() {
-		haystack := strings.ToLower(toolName(id) + " " + aliases[id])
-		if strings.Contains(haystack, q) {
-			out = append(out, id)
-		}
-	}
-	return out
 }
 
 func launcherRecentPath() string {
@@ -2008,49 +1949,20 @@ const appVersion = "5.61"
 
 const latestPatchNotes = `v5.61
 
-• v5.60 실행 파일과 복구 소스를 기능 단위로 대조해 최신 기능 복원
-• 메인 화면에 전체 도구 통합 검색 추가
-• 버전 표기와 패치노트를 실제 배포 버전에 맞게 통일
-• 배포 시 전체 원본 소스 ZIP과 무결성 해시를 함께 제공`
+• 최대화 시 반응형 표준 그리드로 전환하여 UI 겹침 및 확대 깨짐 수정
+• 미니형·컴팩트형의 기능 목록, 최근 사용, 설정 버튼 영역 충돌 수정
+• 화면 형태 설정 카드의 제목 및 설명 글자 잘림 수정
+• Noto Sans KR 볼드 렌더링을 보정하여 한글 획 뭉침 완화
+• 둥근 버튼 바깥에 남던 Windows 기본 회색 사각 배경 제거
+• DPI 변경 시 화면을 다시 배치하여 125%·150% 배율 선명도 개선`
 
 const allPatchNotes = `잡툴사니 · JTSN 패치노트
 
 v5.61
-• v5.60 기능 대조 복구 및 전체 도구 통합 검색 추가
-• 배포 버전 표기 통일 및 원본 소스 동시 배포 정책 적용
-
-v5.50
-• 고급 클립보드 즐겨찾기 셀의 숨은 썸네일 여백을 완전히 제거
-• 고급 클립보드 즐겨찾기 별 전체 중앙 정렬
-
-v5.49
-• 창 종료·숨김 후 그림자 잔상 제거
-• 그림자 캐시 적용으로 프로그램 반응속도 개선
-
-v5.48
-• 스포이드 컬러코드 드래그 선택 복원
-• 고급 클립보드 즐겨찾기 별 중앙 정렬
-
-v5.47
-• 상단바 버튼 hover 및 최대화 아이콘 렌더링 개선
-
-v5.46
-• 패치노트의 각진 외부 영역을 제거하고 그림자 곡률 통일
-
-v5.45
-• 둥근 테두리 슈퍼샘플링 및 사방 균일 외부 그림자 적용
-• 우측·하단 DWM 프레임 그림자 완전 제거
-
-v5.44
-• 기본 상단바 제거, 버튼 라운드 복원, 텍스트 회색 배경 제거
-• 패치노트 우측 잘림과 창 우측·하단 테두리 수정
-
-v5.43
-• 테두리·텍스트·목록 헤더·스크롤바 렌더링 전면 재정비
-• 모든 독립창에 사방으로 퍼지는 DWM 외부 그림자 적용
-
-v5.42
-• 전체 UI 선명도, 버튼 배경, hover 및 깜빡임 안정화
+• 최대화·미니형·컴팩트형 반응형 레이아웃 및 화면 겹침 수정
+• 화면 설정 글자 잘림과 볼드 한글 렌더링 개선
+• 둥근 버튼 외부의 회색 사각 배경 제거
+• DPI 변경 시 UI 재배치 및 상단 최대화 아이콘 선명도 개선
 
 v5.41
 • 업데이트 최초 실행 패치노트 및 다시 보지 않기 기능 추가
@@ -2194,7 +2106,6 @@ func openPatchNotes(latestOnly bool) {
 	if rgn != 0 {
 		procSetWindowRgn.Call(uintptr(patchNotesHWND), rgn, 1)
 	}
-	enableNativeWindowShadow(patchNotesHWND)
 	procShowWindow.Call(uintptr(patchNotesHWND), SW_SHOW)
 	procSetForegroundWindow.Call(uintptr(patchNotesHWND))
 }
@@ -2209,6 +2120,7 @@ func closePatchNotes(hwnd syscall.Handle) {
 	procDestroyWindow.Call(uintptr(hwnd))
 }
 
+//go:nocheckptr
 func patchNotesWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 	switch msg {
 	case WM_CREATE:
@@ -2293,7 +2205,7 @@ func patchNotesWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) 
 		procSetBkColor.Call(uintptr(hdc), rgb(255, 255, 255))
 		return uintptr(brushPanel)
 	case WM_DRAWITEM:
-		dis := (*DRAWITEMSTRUCT)(unsafe.Pointer(lParam))
+		dis := (*DRAWITEMSTRUCT)(winPtr(lParam))
 		if dis != nil {
 			if kind, ok := buttonKinds[dis.HwndItem]; ok {
 				drawOwnerButton(dis, kind)
@@ -2352,7 +2264,6 @@ func openSettingsWindow() {
 	if rgn != 0 {
 		procSetWindowRgn.Call(uintptr(settingsHWND), rgn, 1)
 	}
-	enableNativeWindowShadow(settingsHWND)
 	procShowWindow.Call(uintptr(settingsHWND), SW_SHOW)
 	procSetForegroundWindow.Call(uintptr(settingsHWND))
 }
@@ -2367,6 +2278,7 @@ func clearSettingsControls() {
 	settingsControls = nil
 }
 
+//go:nocheckptr
 func settingsWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 	switch msg {
 	case WM_CREATE:
@@ -2375,9 +2287,9 @@ func settingsWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) ui
 		installHotkeyCapture(settingsHotkeyEdit)
 		settingsControls = append(settingsControls,
 			createOwnerButton(hwnd, "×", 516, 10, 32, 30, ID_SETTINGS_CLOSE, BTN_LAUNCH_GHOST),
-			createOwnerButton(hwnd, "기본형", 148, 126, 124, 120, ID_SETTINGS_STANDARD, BTN_SETTING_OPTION),
-			createOwnerButton(hwnd, "미니형", 280, 126, 124, 120, ID_SETTINGS_MINI, BTN_SETTING_OPTION),
-			createOwnerButton(hwnd, "컴팩트형", 412, 126, 124, 120, ID_SETTINGS_COMPACT, BTN_SETTING_OPTION),
+			createOwnerButton(hwnd, "기본형", 154, 126, 118, 120, ID_SETTINGS_STANDARD, BTN_SETTING_OPTION),
+			createOwnerButton(hwnd, "미니형", 282, 126, 118, 120, ID_SETTINGS_MINI, BTN_SETTING_OPTION),
+			createOwnerButton(hwnd, "컴팩트형", 410, 126, 118, 120, ID_SETTINGS_COMPACT, BTN_SETTING_OPTION),
 			settingsHotkeyEdit,
 			createOwnerButton(hwnd, "고급 클립보드 설정", 154, 390, 374, 52, ID_SETTINGS_CLIP, BTN_SECONDARY),
 			createOwnerButton(hwnd, "완료", 414, 474, 110, 40, ID_SETTINGS_APPLY, BTN_PRIMARY),
@@ -2403,7 +2315,7 @@ func settingsWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) ui
 		procSetBkColor.Call(uintptr(hdc), rgb(255, 255, 255))
 		return uintptr(brushPanel)
 	case WM_DRAWITEM:
-		dis := (*DRAWITEMSTRUCT)(unsafe.Pointer(lParam))
+		dis := (*DRAWITEMSTRUCT)(winPtr(lParam))
 		if dis != nil {
 			if kind, ok := buttonKinds[dis.HwndItem]; ok {
 				drawOwnerButton(dis, kind)
@@ -2610,23 +2522,20 @@ func rememberLauncherRecent(id int) {
 func buildLauncher(hwnd syscall.Handle) {
 	loadLauncherRecent()
 	resetInlineFavoriteCards()
-	if launcherCompact {
-		if launcherSearchHandle != 0 {
-			procShowWindow.Call(uintptr(launcherSearchHandle), SW_HIDE)
-		}
+	// Maximized windows use the responsive standard grid. The chosen mini or
+	// compact mode is restored unchanged when returning to the normal size.
+	if launcherCompact && !customMaximized {
 		buildCompactLauncher(hwnd)
 		return
 	}
-	if launcherMini {
-		if launcherSearchHandle != 0 {
-			procShowWindow.Call(uintptr(launcherSearchHandle), SW_HIDE)
-		}
+	if launcherMini && !customMaximized {
 		buildMiniLauncher(hwnd)
 		return
 	}
 	var client RECT
 	procGetClientRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&client)))
 	launcherLayoutWidth = client.Right
+	launcherLayoutHeight = client.Bottom
 	logicalBottom := int(client.Bottom) - APP_CHROME_HEIGHT
 	contentLeft, contentRight := 282, int(client.Right)-28
 	available := contentRight - contentLeft
@@ -2666,25 +2575,8 @@ func buildLauncher(hwnd syscall.Handle) {
 
 	// Main workspace heading.
 	section := launcherCategoryTitle()
-	if launcherSearchQuery != "" {
-		section = "검색 결과"
-	}
 	launcherLabel(hwnd, section, startX, 28, 360, 34, fontLauncherTitle, false, false)
-	if !launcherFavoriteEditing {
-		if launcherSearchHandle == 0 {
-			launcherSearchRebuilding = true
-			launcherSearchHandle = createWindow(0, "EDIT", launcherSearchQuery, WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_AUTOHSCROLL, contentRight-318, 27, 208, 32, hwnd, ID_LAUNCH_SEARCH)
-			sendFont(launcherSearchHandle, fontNormal)
-			procSendMessageW.Call(uintptr(launcherSearchHandle), EM_SETMARGINS, EC_LEFTMARGIN|EC_RIGHTMARGIN, uintptr(12|(12<<16)))
-			launcherSearchRebuilding = false
-		} else {
-			procSetWindowPos.Call(uintptr(launcherSearchHandle), 0, uintptr(contentRight-318), 27+APP_CHROME_HEIGHT, 208, 32, 0)
-			procShowWindow.Call(uintptr(launcherSearchHandle), SW_SHOW)
-		}
-	} else if launcherSearchHandle != 0 {
-		procShowWindow.Call(uintptr(launcherSearchHandle), SW_HIDE)
-	}
-	if launcherCategory == ID_SIDE_FAVORITES && launcherSearchQuery == "" {
+	if launcherCategory == ID_SIDE_FAVORITES {
 		editText := "편집"
 		if launcherFavoriteEditing {
 			editText = "완료"
@@ -2759,6 +2651,7 @@ func buildCompactLauncher(hwnd syscall.Handle) {
 	var client RECT
 	procGetClientRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&client)))
 	launcherLayoutWidth = client.Right
+	launcherLayoutHeight = client.Bottom
 	contentW := int(client.Right) - 110
 	cardGap := 10
 	cardW := (contentW - cardGap) / 2
@@ -2774,42 +2667,48 @@ func buildCompactLauncher(hwnd syscall.Handle) {
 	launcherButton(hwnd, "정보", 8, int(client.Bottom)-APP_CHROME_HEIGHT-68, 54, 38, ID_SIDE_INFO, BTN_LAUNCH_GHOST)
 
 	tools := allLauncherTools()
+	cardTop, cardH, rowGap := 80, 68, 8
 	for i, id := range tools {
 		col, row := i%2, i/2
 		x := startX + col*(cardW+cardGap)
-		y := 84 + row*82
-		launcherButton(hwnd, toolName(id), x, y, cardW, 74, id, BTN_LAUNCH_CARD)
+		y := cardTop + row*(cardH+rowGap)
+		launcherButton(hwnd, toolName(id), x, y, cardW, cardH, id, BTN_LAUNCH_CARD)
 	}
 
-	launcherLabel(hwnd, "최근 사용", startX, 512, 110, 26, fontLauncherSection, false, false)
+	rows := (len(tools) + 1) / 2
+	recentY := cardTop + rows*(cardH+rowGap) + 8
+	launcherLabel(hwnd, "최근 사용", startX, recentY, 110, 26, fontLauncherSection, false, false)
 	if len(launcherRecent) > 0 {
 		for i, id := range launcherRecent {
 			if i >= 2 {
 				break
 			}
-			launcherButton(hwnd, toolName(id), startX+i*(cardW+cardGap), 544, cardW, 48, id, BTN_RECENT)
+			launcherButton(hwnd, toolName(id), startX+i*(cardW+cardGap), recentY+30, cardW, 44, id, BTN_RECENT)
 		}
 	} else {
-		launcherLabel(hwnd, "최근 실행한 도구가 없습니다.", startX, 544, contentW, 42, fontSmall, true, false)
+		launcherLabel(hwnd, "최근 실행한 도구가 없습니다.", startX, recentY+30, contentW, 42, fontSmall, true, false)
 	}
-	launcherLabel(hwnd, "JTSN v"+appVersion, 7, int(client.Bottom)-APP_CHROME_HEIGHT-26, 90, 20, fontSmall, true, true)
+	launcherLabel(hwnd, "JTSN v"+appVersion, 7, int(client.Bottom)-APP_CHROME_HEIGHT-26, 82, 20, fontSmall, true, true)
 }
 
 func buildMiniLauncher(hwnd syscall.Handle) {
 	var client RECT
 	procGetClientRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&client)))
 	launcherLayoutWidth = client.Right
+	launcherLayoutHeight = client.Bottom
 	x := (int(client.Right) - 374) / 2
 	if x < 20 {
 		x = 20
 	}
-	launcherLabel(hwnd, "빠른 도구", x, 118, 180, 28, fontLauncherSection, false, true)
+	launcherLabel(hwnd, "빠른 도구", x, 112, 180, 28, fontLauncherSection, false, true)
 	tools := allLauncherTools()
+	listTop, rowH, rowGap := 140, 40, 6
 	for i, id := range tools {
-		launcherButton(hwnd, toolName(id), x, 142+i*48, 374, 44, id, BTN_RECENT)
+		launcherButton(hwnd, toolName(id), x, listTop+i*(rowH+rowGap), 374, rowH, id, BTN_RECENT)
 	}
-	launcherButton(hwnd, "설정", x, 644, 180, 42, ID_SIDE_SETTINGS, BTN_LAUNCH_GHOST)
-	launcherButton(hwnd, "정보", x+194, 644, 180, 42, ID_SIDE_INFO, BTN_LAUNCH_GHOST)
+	actionY := listTop + len(tools)*(rowH+rowGap) + 8
+	launcherButton(hwnd, "설정", x, actionY, 180, 40, ID_SIDE_SETTINGS, BTN_LAUNCH_GHOST)
+	launcherButton(hwnd, "정보", x+194, actionY, 180, 40, ID_SIDE_INFO, BTN_LAUNCH_GHOST)
 	launcherLabel(hwnd, "JTSN v"+appVersion+" · 미니형", 8, int(client.Bottom)-APP_CHROME_HEIGHT-35, 180, 22, fontSmall, true, true)
 }
 
@@ -4207,6 +4106,12 @@ func drawOwnerButton(dis *DRAWITEMSTRUCT, kind int) {
 	if dis == nil {
 		return
 	}
+	// BUTTON controls are rectangular even when their owner-drawn face is
+	// rounded. Clear that complete rectangle first so the native grey button
+	// background never remains visible outside the rounded path.
+	cornerBrush := solidBrush(255, 255, 255)
+	procFillRect.Call(uintptr(dis.HDC), uintptr(unsafe.Pointer(&dis.RcItem)), uintptr(cornerBrush))
+	procDeleteObject.Call(uintptr(cornerBrush))
 	if kind == BTN_COLOR_SWATCH {
 		drawColorSwatch(dis)
 		return
@@ -4389,24 +4294,25 @@ func drawSettingsOption(dis *DRAWITEMSTRUCT) {
 	oldF, _, _ := procSelectObject.Call(uintptr(dis.HDC), uintptr(fontButton))
 	title := getText(dis.HwndItem)
 	rc := dis.RcItem
-	rc.Left += 45
+	rc.Left += 42
+	rc.Right -= 6
 	rc.Top += 10
 	rc.Bottom = rc.Top + 30
-	procDrawTextW.Call(uintptr(dis.HDC), uintptr(unsafe.Pointer(p16(title))), uintptr(len(syscall.StringToUTF16(title))-1), uintptr(unsafe.Pointer(&rc)), DT_LEFT|DT_VCENTER|DT_SINGLELINE)
+	procDrawTextW.Call(uintptr(dis.HDC), uintptr(unsafe.Pointer(p16(title))), uintptr(len(syscall.StringToUTF16(title))-1), uintptr(unsafe.Pointer(&rc)), DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS)
 	procSelectObject.Call(uintptr(dis.HDC), oldF)
-	sub := "넓은 카드 화면"
+	sub := "넓은 카드형\n대시보드"
 	if id == ID_SETTINGS_MINI {
-		sub = "세로형 빠른 목록"
+		sub = "세로형\n빠른 목록"
 	} else if id == ID_SETTINGS_COMPACT {
-		sub = "레일형 도구 화면"
+		sub = "레일형\n도구 그리드"
 	}
 	procSetTextColor.Call(uintptr(dis.HDC), rgb(100, 116, 139))
 	oldS, _, _ := procSelectObject.Call(uintptr(dis.HDC), uintptr(fontSmall))
 	sr := dis.RcItem
-	sr.Left += 10
-	sr.Right -= 10
-	sr.Top += 52
-	sr.Bottom -= 8
+	sr.Left += 18
+	sr.Right -= 12
+	sr.Top += 53
+	sr.Bottom -= 10
 	procDrawTextW.Call(uintptr(dis.HDC), uintptr(unsafe.Pointer(p16(sub))), uintptr(len(syscall.StringToUTF16(sub))-1), uintptr(unsafe.Pointer(&sr)), DT_CENTER|DT_VCENTER|DT_WORDBREAK)
 	procSelectObject.Call(uintptr(dis.HDC), oldS)
 }

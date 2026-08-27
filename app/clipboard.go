@@ -332,6 +332,7 @@ func clipboardForegroundProcess() (string, bool) {
 	return strings.ToLower(filepath.Base(syscall.UTF16ToString(buf[:n]))), password
 }
 
+//go:nocheckptr
 func readClipboardSnapshot(hwnd syscall.Handle) (string, []byte, int, int) {
 	if r, _, _ := procOpenClipboard.Call(uintptr(hwnd)); r == 0 {
 		return "", nil, 0, 0
@@ -343,7 +344,7 @@ func readClipboardSnapshot(hwnd syscall.Handle) (string, []byte, int, int) {
 			p, _, _ := procGlobalLockClip.Call(h)
 			if p != 0 {
 				sz, _, _ := procGlobalSizeClip.Call(h)
-				u := unsafe.Slice((*uint16)(unsafe.Pointer(p)), int(sz/2))
+				u := unsafe.Slice((*uint16)(winPtr(p)), int(sz/2))
 				n := 0
 				for n < len(u) && u[n] != 0 {
 					n++
@@ -360,7 +361,7 @@ func readClipboardSnapshot(hwnd syscall.Handle) (string, []byte, int, int) {
 			p, _, _ := procGlobalLockClip.Call(h)
 			sz, _, _ := procGlobalSizeClip.Call(h)
 			if p != 0 && sz > 40 {
-				b := append([]byte(nil), unsafe.Slice((*byte)(unsafe.Pointer(p)), int(sz))...)
+					b := append([]byte(nil), unsafe.Slice((*byte)(winPtr(p)), int(sz))...)
 				procGlobalUnlockClip.Call(h)
 				w := int(*(*int32)(unsafe.Pointer(&b[4])))
 				hgt := int(*(*int32)(unsafe.Pointer(&b[8])))
@@ -750,17 +751,18 @@ func handleClipboardCommand(id, notify int) bool {
 	return false
 }
 
+//go:nocheckptr
 func clipboardHandleNotify(lParam uintptr) bool {
 	clipNotifyResult = 0
 	if clipList == 0 || lParam == 0 {
 		return false
 	}
-	hdr := (*NMHDR)(unsafe.Pointer(lParam))
+	hdr := (*NMHDR)(winPtr(lParam))
 	if hdr.HwndFrom != clipList {
 		return false
 	}
 	if int32(hdr.Code) == -12 { // NM_CUSTOMDRAW
-		cd := (*nmListViewCustomDrawClip)(unsafe.Pointer(lParam))
+		cd := (*nmListViewCustomDrawClip)(winPtr(lParam))
 		switch cd.Nmcd.DrawStage {
 		case 0x00000001: // CDDS_PREPAINT
 			clipNotifyResult = 0x00000020 // CDRF_NOTIFYITEMDRAW
@@ -789,7 +791,7 @@ func clipboardHandleNotify(lParam uintptr) bool {
 		}
 		return true
 	}
-	nm := (*NMLISTVIEW)(unsafe.Pointer(lParam))
+	nm := (*NMLISTVIEW)(winPtr(lParam))
 	if nm.Hdr.HwndFrom != clipList {
 		return false
 	}
@@ -885,6 +887,7 @@ func deleteClipboardRecords(includeFavorites bool) {
 	saveClipboardRecordsLocked()
 }
 
+//go:nocheckptr
 func restoreClipboardRecord(r clipboardRecord) bool {
 	if r.Kind != "image" {
 		return copyClipboard(r.Text) == nil
@@ -906,7 +909,7 @@ func restoreClipboardRecord(r clipboardRecord) bool {
 	if p == 0 {
 		return false
 	}
-	copy(unsafe.Slice((*byte)(unsafe.Pointer(p)), len(b)), b)
+	copy(unsafe.Slice((*byte)(winPtr(p)), len(b)), b)
 	procGlobalUnlockClip.Call(h)
 	ok, _, _ := procSetClipboardData.Call(CF_DIB, h)
 	return ok != 0

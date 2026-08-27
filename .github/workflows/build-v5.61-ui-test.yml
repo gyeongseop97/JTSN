@@ -1,0 +1,55 @@
+name: Build JTSN v5.61 Release
+
+on:
+  push:
+    branches:
+      - fix/ui-responsive-v5.61
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+      - name: Verify and build JTSN core
+        shell: pwsh
+        working-directory: app
+        run: |
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          New-Item -ItemType Directory -Force ../outputs | Out-Null
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o ../outputs/JTSN_v5.61.exe .
+          $coreHash=(Get-FileHash ../outputs/JTSN_v5.61.exe -Algorithm SHA256).Hash.ToLower()
+          if ($coreHash -ne "5d9f88926950ae354cc52e91b732661b8db11aa32fe4712b13f682bc051f7451") {
+            throw "Unexpected core checksum: $coreHash"
+          }
+          New-Item -ItemType Directory -Force ../installer/core | Out-Null
+          Copy-Item -Force ../outputs/JTSN_v5.61.exe ../installer/core/JTSN_v5.61.exe
+      - name: Build single-file installer
+        shell: pwsh
+        working-directory: installer
+        run: |
+          go test -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o ../outputs/JTSN_Setup_v5.61.exe .
+          $hash=(Get-FileHash ../outputs/JTSN_Setup_v5.61.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  JTSN_Setup_v5.61.exe" | Set-Content -Encoding ascii ../outputs/JTSN_Setup_v5.61.exe.sha256
+      - name: Package full source
+        shell: pwsh
+        run: |
+          ./scripts/package-release.ps1 -Version 5.61
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JTSN-v5.61-release
+          path: |
+            outputs/JTSN_Setup_v5.61.exe
+            outputs/JTSN_Setup_v5.61.exe.sha256
+            outputs/JTSN_v5.61_FULL_SOURCE.zip
+            outputs/JTSN_v5.61_SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
