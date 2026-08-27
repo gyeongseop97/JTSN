@@ -1,0 +1,80 @@
+name: Publish JTSN v5.63
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+
+      - name: Build application
+        shell: pwsh
+        working-directory: app
+        run: |
+          gofmt -w .
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_v5.63.exe .
+          $coreHash=(Get-FileHash JTSN_v5.63.exe -Algorithm SHA256).Hash.ToLower()
+          "CORE_SHA256=$coreHash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          Copy-Item app/JTSN_v5.63.exe installer/core/JTSN_v5.63.exe -Force
+          $source = Get-Content installer/main.go -Raw
+          $source = $source.Replace('core/JTSN_v5.61.exe', 'core/JTSN_v5.63.exe')
+          $source = [regex]::Replace($source, 'expectedCoreSHA = "[0-9a-f]+"', "expectedCoreSHA = `"$env:CORE_SHA256`"")
+          Set-Content installer/main.go -Value $source -Encoding utf8
+          Push-Location installer
+          gofmt -w main.go
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_Setup_v5.63.exe .
+          Pop-Location
+
+      - name: Package source and checksums
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release-source/JTSN_v5.63_FULL_SOURCE | Out-Null
+          Copy-Item app release-source/JTSN_v5.63_FULL_SOURCE/app -Recurse
+          Copy-Item installer release-source/JTSN_v5.63_FULL_SOURCE/installer -Recurse
+          Remove-Item release-source/JTSN_v5.63_FULL_SOURCE/app/JTSN_v5.63.exe -Force
+          Remove-Item release-source/JTSN_v5.63_FULL_SOURCE/installer/JTSN_Setup_v5.63.exe -Force
+          Get-ChildItem release-source/JTSN_v5.63_FULL_SOURCE/installer/core -Filter '*.exe' | Remove-Item -Force
+          Copy-Item .github release-source/JTSN_v5.63_FULL_SOURCE/.github -Recurse
+          Compress-Archive -Path release-source/JTSN_v5.63_FULL_SOURCE -DestinationPath JTSN_v5.63_FULL_SOURCE.zip
+          $installerHash=(Get-FileHash installer/JTSN_Setup_v5.63.exe -Algorithm SHA256).Hash.ToLower()
+          $sourceHash=(Get-FileHash JTSN_v5.63_FULL_SOURCE.zip -Algorithm SHA256).Hash.ToLower()
+          @(
+            "$installerHash  JTSN_Setup_v5.63.exe"
+            "$sourceHash  JTSN_v5.63_FULL_SOURCE.zip"
+          ) | Set-Content -Encoding ascii JTSN_v5.63_SHA256SUMS.txt
+          @"
+          ## v5.63
+
+          - 실행 중 자동 업데이트 확인 및 6시간 다시 알림 방지
+          - 설치·업데이트 진행 화면을 JTSN 디자인으로 통일
+          - 다운로드·SHA-256 검증·파일 교체·자동 재실행 안정화
+
+          ## v5.62
+
+          - 최대화·미니형·컴팩트형 반응형 레이아웃 개선
+          - 화면 설정 및 한글·ClearType 렌더링 개선
+          - 버튼 외부 회색 배경과 DPI 재배치 문제 개선
+          "@ | Set-Content -Encoding utf8 RELEASE_NOTES.md
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v5.63 installer/JTSN_Setup_v5.63.exe JTSN_v5.63_FULL_SOURCE.zip JTSN_v5.63_SHA256SUMS.txt --target ${{ github.sha }} --title "JTSN v5.63" --notes-file RELEASE_NOTES.md --latest
