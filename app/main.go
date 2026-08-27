@@ -128,6 +128,7 @@ const (
 	WM_APP_FAV_REBUILD  = WM_APP + 50
 	WM_APP_BUNDLE_DONE  = WM_APP + 51
 	WM_APP_OCR_DONE     = WM_APP + 52
+	WM_APP_UPDATE_EXIT  = WM_APP + 60
 	WM_DROPFILES        = 0x0233
 	WM_SETICON          = 0x0080
 	ICON_SMALL          = 0
@@ -159,6 +160,7 @@ const (
 	VK_DELETE           = 0x2E
 	ID_TIMER_EYEDROPPER = 9101
 	ID_TIMER_SEARCH     = 9102
+	ID_TIMER_UPDATE     = 9103
 
 	MB_OK              = 0x00000000
 	MB_ICONINFORMATION = 0x00000040
@@ -719,6 +721,37 @@ var duplicateDeleteMailbox []string
 var duplicateDeleteErr string
 var colorMailbox string
 var errorMailbox string
+var updateCheckMu sync.Mutex
+var updateCheckRunning bool
+
+func checkForUpdateInBackground() {
+	updateCheckMu.Lock()
+	if updateCheckRunning {
+		updateCheckMu.Unlock()
+		return
+	}
+	updateCheckRunning = true
+	updateCheckMu.Unlock()
+
+	go func() {
+		defer func() {
+			updateCheckMu.Lock()
+			updateCheckRunning = false
+			updateCheckMu.Unlock()
+		}()
+		base := os.Getenv("LOCALAPPDATA")
+		if base == "" {
+			return
+		}
+		launcher := filepath.Join(base, "Programs", "JTSN", "JTSN.exe")
+		if st, err := os.Stat(launcher); err != nil || st.IsDir() {
+			return
+		}
+		cmd := exec.Command(launcher, "--background-update-check", strconv.Itoa(os.Getpid()))
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		_ = cmd.Run()
+	}()
+}
 
 func p16(s string) *uint16     { p, _ := syscall.UTF16PtrFromString(s); return p }
 func rgb(r, g, b byte) uintptr { return uintptr(uint32(r) | uint32(g)<<8 | uint32(b)<<16) }
@@ -1004,6 +1037,9 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			launcherBuilt = true
 			initClipboardMonitor(hwnd)
 			initTray(hwnd)
+			// Check shortly after startup, then every 30 minutes while JTSN stays open.
+			// The installed launcher owns download, checksum and replacement logic.
+			procSetTimer.Call(uintptr(hwnd), ID_TIMER_UPDATE, 15000, 0)
 		} else {
 			procDragAcceptFiles.Call(uintptr(hwnd), 1)
 			renderTool(currentTool)
@@ -1162,6 +1198,14 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 			return 0
 		}
 	case WM_TIMER:
+		if wParam == ID_TIMER_UPDATE && launchMode == "" {
+			procKillTimer.Call(uintptr(hwnd), ID_TIMER_UPDATE)
+			procSetTimer.Call(uintptr(hwnd), ID_TIMER_UPDATE, 30*60*1000, 0)
+			if !busy {
+				checkForUpdateInBackground()
+			}
+			return 0
+		}
 		if wParam == ID_TIMER_SEARCH && launchMode == "" {
 			procKillTimer.Call(uintptr(hwnd), ID_TIMER_SEARCH)
 			rebuildLauncher(hwnd)
@@ -1363,6 +1407,12 @@ func wndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 		if launchMode == "" && trayMessage(lParam) {
 			return 0
 		}
+	case WM_APP_UPDATE_EXIT:
+		// An accepted update must close the running core instead of merely hiding
+		// the launcher to the tray. The updater starts the new version afterwards.
+		trayExitRequested = true
+		procDestroyWindow.Call(uintptr(hwnd))
+		return 0
 	case WM_CLOSE:
 		if launchMode == "" && !trayExitRequested {
 			hideLauncherToTray()
@@ -2020,9 +2070,17 @@ func resizeLauncher(hwnd syscall.Handle) {
 	procSetWindowPos.Call(uintptr(hwnd), 0, 0, 0, uintptr(w), uintptr(h), SWP_NOMOVE|SWP_NOZORDER)
 }
 
-const appVersion = "5.62"
+const appVersion = "5.63"
 
-const latestPatchNotes = `v5.62
+const latestPatchNotes = `v5.63
+
+• 실행 중에도 30분마다 새 버전을 자동 확인
+• 새 버전 발견 시 지금 업데이트/나중에 선택 안내
+• 나중에 선택한 버전은 6시간 동안 다시 알리지 않음
+• 설치·패치 진행 화면을 JTSN 브랜드 디자인으로 개선
+• 업데이트 파일 다운로드·SHA-256 검증·교체·재실행 흐름 유지
+
+v5.62
 
 • 최대화 시 화면 크기에 맞춰 기본형 반응형 레이아웃으로 재구성
 • 미니형 하단 OCR·설정 버튼 겹침 제거
@@ -2033,6 +2091,11 @@ const latestPatchNotes = `v5.62
 • 모니터 DPI 변경 시 창 크기와 UI를 다시 계산`
 
 const allPatchNotes = `잡툴사니 · JTSN 패치노트
+
+v5.63
+• 실행 중 자동 업데이트 확인 및 6시간 다시 알림 방지
+• 설치·업데이트 안내 및 진행 화면 디자인 개선
+• 다운로드·체크섬 검증·파일 교체·자동 재실행 안정화
 
 v5.62
 • 최대화·미니형·컴팩트형 반응형 레이아웃 및 겹침 수정
