@@ -1,0 +1,384 @@
+name: Publish JTSN v5.66 Modern Installer
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.installer/release-v5.66.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+
+      - name: Modernize installer UI and fix embedded core lookup
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          import re
+
+          p = Path('installer/main.go')
+          s = p.read_text(encoding='utf-8')
+
+          # Version
+          s = re.sub(r'launcherVersion = "[0-9.]+"', 'launcherVersion = "5.66"', s, count=1)
+
+          # Never hard-code a specific embedded core filename again.
+          s = re.sub(r'//go:embed core/JTSN_v[0-9.]+\.exe', '//go:embed core/*.exe', s, count=1)
+
+          launch_pat = re.compile(
+              r'func launchCore\(\) \{\n'
+              r'\tb, err := embeddedCore\.ReadFile\("core/JTSN_v[0-9.]+\.exe"\)\n'
+              r'\tif err != nil \{\n'
+              r'\t\tmessage\(err\.Error\(\), 0x10\)\n'
+              r'\t\treturn\n'
+              r'\t\}\n'
+              r'\tcoreHash := sha256\.Sum256\(b\)'
+          )
+          launch_repl = '''func launchCore() {
+          \tentries, err := embeddedCore.ReadDir("core")
+          \tif err != nil {
+          \t\tmessage("내장 JTSN 본체를 확인하지 못했습니다.\\n\\n"+err.Error(), 0x10)
+          \t\treturn
+          \t}
+          \tcoreName := ""
+          \tfor _, entry := range entries {
+          \t\tname := entry.Name()
+          \t\tif entry.IsDir() || !strings.HasPrefix(name, "JTSN_v") || !strings.HasSuffix(strings.ToLower(name), ".exe") {
+          \t\t\tcontinue
+          \t\t}
+          \t\tif coreName != "" {
+          \t\t\tmessage("설치 패키지 안에 JTSN 본체가 둘 이상 포함되어 있습니다.", 0x10)
+          \t\t\treturn
+          \t\t}
+          \t\tcoreName = name
+          \t}
+          \tif coreName == "" {
+          \t\tmessage("설치 패키지에서 JTSN 본체를 찾지 못했습니다.", 0x10)
+          \t\treturn
+          \t}
+          \tb, err := embeddedCore.ReadFile("core/" + coreName)
+          \tif err != nil {
+          \t\tmessage(err.Error(), 0x10)
+          \t\treturn
+          \t}
+          \tcoreHash := sha256.Sum256(b)'''
+          s2, n = launch_pat.subn(launch_repl, s, count=1)
+          if n != 1:
+              raise SystemExit('launchCore hard-coded core patch failed')
+          s = s2
+
+          # Brand icon loader used by the installer header and titlebar.
+          marker = 'func p16(s string) *uint16 { p, _ := syscall.UTF16PtrFromString(s); return p }\n'
+          helper = marker + '''\nfunc loadInstallerBrandIcon(size int) uintptr {
+          \tif len(appIcon) == 0 {
+          \t\treturn 0
+          \t}
+          \tdir := filepath.Join(os.TempDir(), "JTSN")
+          \tif err := os.MkdirAll(dir, 0755); err != nil {
+          \t\treturn 0
+          \t}
+          \ticonPath := filepath.Join(dir, "installer_brand.ico")
+          \tif err := os.WriteFile(iconPath, appIcon, 0644); err != nil {
+          \t\treturn 0
+          \t}
+          \tu := syscall.NewLazyDLL("user32.dll")
+          \th, _, _ := u.NewProc("LoadImageW").Call(0, uintptr(unsafe.Pointer(p16(iconPath))), 1, uintptr(size), uintptr(size), 0x0010)
+          \treturn h
+          }\n'''
+          if 'func loadInstallerBrandIcon' not in s:
+              if marker not in s:
+                  raise SystemExit('p16 marker not found')
+              s = s.replace(marker, helper, 1)
+
+          # Cleaner modern button palette.
+          old_btn = '''\tfill := uintptr(0x00FFFFFF)
+          \tline := uintptr(0x00DDD7D2)
+          \ttextColor := uintptr(0x00483B32)
+          \tif primary {
+          \t\tfill, line, textColor = 0x00EF6F2E, 0x00EF6F2E, 0x00FFFFFF
+          \t}
+          \tif d.ItemState&odsSelected != 0 {
+          \t\tif primary {
+          \t\t\tfill = 0x00D85B1D
+          \t\t} else {
+          \t\t\tfill = 0x00F4F1EE
+          \t\t}
+          \t}'''
+          new_btn = '''\tfill := uintptr(0x00FFFFFF)
+          \tline := uintptr(0x00E4DED8)
+          \ttextColor := uintptr(0x00443A32)
+          \tif primary {
+          \t\tfill, line, textColor = 0x00EF6F2E, 0x00EF6F2E, 0x00FFFFFF
+          \t}
+          \tif d.ItemState&odsSelected != 0 {
+          \t\tif primary {
+          \t\t\tfill = 0x00D85B1D
+          \t\t\tline = 0x00D85B1D
+          \t\t} else {
+          \t\t\tfill = 0x00F6F3F0
+          \t\t}
+          \t}'''
+          if old_btn not in s:
+              raise SystemExit('button palette block not found')
+          s = s.replace(old_btn, new_btn, 1)
+
+          # Installer-specific brushes and handles.
+          old_brush = '''\tcreateBrush := gdi32.NewProc("CreateSolidBrush")
+          \tbrandBrush, _, _ := createBrush.Call(0x00EF6F2E)
+          \theaderBrush, _, _ := createBrush.Call(0x00FCFAF8)
+          \twhiteBrush, _, _ := createBrush.Call(0x00FFFFFF)
+          \tsurfaceBrush, _, _ := createBrush.Call(0x00FAF7F4)
+          \tsetTextColor := gdi32.NewProc("SetTextColor")
+          \tsetBkColor := gdi32.NewProc("SetBkColor")
+          \tvar headerBand, headerTitle, headerSub, accentBar, logoText uintptr'''
+          new_brush = '''\tcreateBrush := gdi32.NewProc("CreateSolidBrush")
+          \tbrandBrush, _, _ := createBrush.Call(0x00EF6F2E)
+          \theaderBrush, _, _ := createBrush.Call(0x00FCFAF8)
+          \twhiteBrush, _, _ := createBrush.Call(0x00FFFFFF)
+          \tsurfaceBrush, _, _ := createBrush.Call(0x00F8F6F3)
+          \tsetTextColor := gdi32.NewProc("SetTextColor")
+          \tsetBkColor := gdi32.NewProc("SetBkColor")
+          \tvar headerBand, headerTitle, headerSub, accentBar, logoText, logoIconCtl uintptr'''
+          if old_brush not in s:
+              raise SystemExit('installer brush block not found')
+          s = s.replace(old_brush, new_brush, 1)
+
+          # Header icon should share the clean header background.
+          s = s.replace('if lp == headerBand || lp == headerTitle || lp == logoText {', 'if lp == headerBand || lp == headerTitle || lp == logoText || lp == logoIconCtl {', 1)
+
+          # Main window: larger, calmer layout, real app icon in titlebar.
+          old_window = '''\thInstance, _, _ := kernel32.NewProc("GetModuleHandleW").Call(0)
+          \tclassName := p16("JTSNInstallerWindow")
+          \twc := wndClassEx{Size: uint32(unsafe.Sizeof(wndClassEx{})), WndProc: wndProc, Instance: hInstance, Background: 6, ClassName: uintptr(unsafe.Pointer(className))}
+          \tuser32.NewProc("RegisterClassExW").Call(uintptr(unsafe.Pointer(&wc)))
+
+          \tcreate := user32.NewProc("CreateWindowExW")
+          \tinstallerHWND, _, _ = create.Call(0, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(p16("JTSN 설치"))), 0x00CA0000,
+          \t\tuintptr(0x80000000), uintptr(0x80000000), 640, 410, 0, 0, hInstance, 0)'''
+          new_window = '''\thInstance, _, _ := kernel32.NewProc("GetModuleHandleW").Call(0)
+          \tbrandIcon := loadInstallerBrandIcon(64)
+          \tclassName := p16("JTSNInstallerWindow")
+          \twc := wndClassEx{Size: uint32(unsafe.Sizeof(wndClassEx{})), WndProc: wndProc, Instance: hInstance, Icon: brandIcon, Background: 6, ClassName: uintptr(unsafe.Pointer(className)), IconSm: brandIcon}
+          \tuser32.NewProc("RegisterClassExW").Call(uintptr(unsafe.Pointer(&wc)))
+
+          \tcreate := user32.NewProc("CreateWindowExW")
+          \tinstallerHWND, _, _ = create.Call(0, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(p16("JTSN 설치"))), 0x00CA0000,
+          \t\tuintptr(0x80000000), uintptr(0x80000000), 720, 500, 0, 0, hInstance, 0)'''
+          if old_window not in s:
+              raise SystemExit('installer window block not found')
+          s = s.replace(old_window, new_window, 1)
+          s = s.replace('CreateRoundRectRgn").Call(0, 0, 641, 411, 24, 24)', 'CreateRoundRectRgn").Call(0, 0, 721, 501, 28, 28)', 1)
+
+          # Replace the visible installer content with a cleaner, spacious layout.
+          ui_pat = re.compile(
+              r'\tbodyFont, titleFont, subFont, buttonFont, logoFont := makeFont\(17, 400\), makeFont\(26, 700\), makeFont\(15, 400\), makeFont\(16, 600\), makeFont\(24, 800\)\n'
+              r'(?s:.*?)'
+              r'\tmodernButtons\[cancelBtnHWND\] = false'
+          )
+          ui_repl = '''\tbodyFont, titleFont, subFont, buttonFont, labelFont := makeFont(16, 400), makeFont(30, 700), makeFont(15, 400), makeFont(16, 600), makeFont(14, 600)
+          \tadd := func(class, text string, style uintptr, x, y, w, h int, id, font uintptr) uintptr {
+          \t\tchild, _, _ := create.Call(0, uintptr(unsafe.Pointer(p16(class))), uintptr(unsafe.Pointer(p16(text))), style|0x40000000|0x10000000,
+          \t\t\tuintptr(x), uintptr(y), uintptr(w), uintptr(h), installerHWND, id, hInstance, 0)
+          \t\tsendMessage.Call(child, wmSetFont, font, 1)
+          \t\treturn child
+          \t}
+          \theaderBand = add("STATIC", "", 0, 0, 0, 720, 122, 0, bodyFont)
+          \tlogoIconCtl = add("STATIC", "", 0x00000003, 40, 27, 64, 64, 0, bodyFont)
+          \tif headerIcon := loadInstallerBrandIcon(56); headerIcon != 0 {
+          \t\tsendMessage.Call(logoIconCtl, 0x0170, headerIcon, 0)
+          \t}
+          \theaderTitle = add("STATIC", "잡툴사니 설치", 0, 124, 25, 500, 38, 0, titleFont)
+          \theaderSub = add("STATIC", "JTSN을 설치하고 자동 업데이트를 준비합니다", 0, 125, 68, 500, 24, 0, subFont)
+
+          \tadd("STATIC", "설치 경로", 0, 42, 150, 120, 22, 0, labelFont)
+          \tadd("EDIT", filepath.Dir(want), 0x00800800, 42, 177, 636, 38, 0, subFont)
+          \tadd("STATIC", "기본 설치 위치이며, 설치 후 바탕화면 바로가기가 자동으로 생성됩니다.", 0, 42, 222, 636, 24, 0, subFont)
+
+          \tadd("STATIC", "설치 상태", 0, 42, 270, 120, 22, 0, labelFont)
+          \tprogressHWND = add("msctls_progress32", "", 0, 42, 299, 636, 12, 0, bodyFont)
+          \tsendMessage.Call(progressHWND, pbmSetRange32, 0, 100)
+          \tsendMessage.Call(progressHWND, pbmSetBarColor, 0, 0x00EF6F2E)
+          \tsendMessage.Call(progressHWND, pbmSetBkColor, 0, 0x00ECE8E4)
+          \tstatusHWND = add("STATIC", "설치 준비가 완료되었습니다. 아래 버튼을 눌러 시작하세요.", 0, 42, 323, 636, 28, 0, subFont)
+          \tadd("STATIC", "✓ 프로그램 파일 검증   ·   ✓ 자동 업데이트 지원   ·   ✓ 사용자 영역 설치", 0, 42, 361, 636, 24, 0, subFont)
+
+          \tcancelBtnHWND = add("BUTTON", "취소", bsOwnerDraw|0x00008000, 426, 411, 106, 44, idCancel, buttonFont)
+          \tinstallBtnHWND = add("BUTTON", "설치 시작", bsOwnerDraw|0x00008000, 544, 411, 134, 44, idInstall, buttonFont)
+          \tmodernButtons[installBtnHWND] = true
+          \tmodernButtons[cancelBtnHWND] = false'''
+          s2, n = ui_pat.subn(ui_repl, s, count=1)
+          if n != 1:
+              raise SystemExit('installer UI block patch failed')
+          s = s2
+
+          p.write_text(s, encoding='utf-8')
+
+          app = Path('app/main.go')
+          a = app.read_text(encoding='utf-8')
+          a = re.sub(r'const appVersion = "[0-9.]+"', 'const appVersion = "5.66"', a, count=1)
+          app.write_text(a, encoding='utf-8')
+          '@ | Set-Content -Encoding utf8 patch_installer.py
+          python patch_installer.py
+          gofmt -w installer/main.go app/main.go
+
+          @'
+          <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+          <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+            <assemblyIdentity version="1.0.0.0" processorArchitecture="*" name="JTSN.Installer" type="win32"/>
+            <description>JTSN Installer</description>
+            <dependency>
+              <dependentAssembly>
+                <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/>
+              </dependentAssembly>
+            </dependency>
+            <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+              <security>
+                <requestedPrivileges>
+                  <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+                </requestedPrivileges>
+              </security>
+            </trustInfo>
+            <application xmlns="urn:schemas-microsoft-com:asm.v3">
+              <windowsSettings>
+                <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+                <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+              </windowsSettings>
+            </application>
+          </assembly>
+          '@ | Set-Content -Encoding utf8 installer/app.manifest
+
+      - name: Rebuild installer Windows resources
+        shell: pwsh
+        run: |
+          go install github.com/akavel/rsrc@latest
+          $rsrc = Join-Path (go env GOPATH) 'bin\rsrc.exe'
+          & $rsrc -manifest installer/app.manifest -ico installer/assets/JTSN.ico -o installer/rsrc_windows_amd64.syso
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to rebuild installer resources' }
+
+      - name: Verify source invariants
+        shell: pwsh
+        run: |
+          $src = Get-Content installer/main.go -Raw
+          if ($src -match 'ReadFile\("core/JTSN_v[0-9.]+\.exe"\)') { throw 'Version-specific core ReadFile still exists' }
+          if ($src -notmatch '//go:embed core/\*\.exe') { throw 'Wildcard core embed missing' }
+          if ($src -notmatch 'loadInstallerBrandIcon') { throw 'Installer brand icon loader missing' }
+          if ($src -notmatch '720, 500') { throw 'Modern installer dimensions missing' }
+
+      - name: Commit modern installer source to main
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add installer/main.go installer/app.manifest installer/rsrc_windows_amd64.syso app/main.go
+          if (-not (git diff --cached --quiet)) {
+            git commit -m 'Modernize installer UI and remove core filename hardcoding'
+            git push origin HEAD:main
+          }
+
+      - name: Build application
+        shell: pwsh
+        working-directory: app
+        run: |
+          gofmt -w .
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_v5.66.exe .
+          $coreHash=(Get-FileHash JTSN_v5.66.exe -Algorithm SHA256).Hash.ToLower()
+          "CORE_SHA256=$coreHash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build and verify installer
+        shell: pwsh
+        run: |
+          Get-ChildItem installer/core -Filter '*.exe' -ErrorAction SilentlyContinue | Remove-Item -Force
+          Copy-Item app/JTSN_v5.66.exe installer/core/JTSN_v5.66.exe -Force
+
+          $source = Get-Content installer/main.go -Raw
+          $source = [regex]::Replace($source, 'expectedCoreSHA = "[0-9a-f]*"', "expectedCoreSHA = `"$env:CORE_SHA256`"", 1)
+          Set-Content installer/main.go -Value $source -Encoding utf8
+
+          @'
+          package main
+
+          import (
+              "crypto/sha256"
+              "encoding/hex"
+              "strings"
+              "testing"
+          )
+
+          func TestEmbeddedCorePackage(t *testing.T) {
+              entries, err := embeddedCore.ReadDir("core")
+              if err != nil { t.Fatal(err) }
+              names := []string{}
+              for _, e := range entries {
+                  n := e.Name()
+                  if !e.IsDir() && strings.HasPrefix(n, "JTSN_v") && strings.HasSuffix(strings.ToLower(n), ".exe") {
+                      names = append(names, n)
+                  }
+              }
+              if len(names) != 1 { t.Fatalf("expected exactly one embedded core, got %d: %v", len(names), names) }
+              b, err := embeddedCore.ReadFile("core/" + names[0])
+              if err != nil { t.Fatal(err) }
+              sum := sha256.Sum256(b)
+              if hex.EncodeToString(sum[:]) != expectedCoreSHA {
+                  t.Fatalf("embedded core hash mismatch")
+              }
+          }
+          '@ | Set-Content -Encoding utf8 installer/embedded_core_test.go
+
+          Push-Location installer
+          gofmt -w main.go embedded_core_test.go
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          Remove-Item embedded_core_test.go -Force
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_Setup_v5.66.exe .
+          Pop-Location
+
+          if ((Get-Item installer/JTSN_Setup_v5.66.exe).Length -lt 1000000) { throw 'Installer binary unexpectedly small' }
+
+      - name: Package source and checksums
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release-source/JTSN_v5.66_FULL_SOURCE | Out-Null
+          Copy-Item app release-source/JTSN_v5.66_FULL_SOURCE/app -Recurse
+          Copy-Item installer release-source/JTSN_v5.66_FULL_SOURCE/installer -Recurse
+          Remove-Item release-source/JTSN_v5.66_FULL_SOURCE/app/JTSN_v5.66.exe -Force
+          Remove-Item release-source/JTSN_v5.66_FULL_SOURCE/installer/JTSN_Setup_v5.66.exe -Force
+          Get-ChildItem release-source/JTSN_v5.66_FULL_SOURCE/installer/core -Filter '*.exe' | Remove-Item -Force
+          Copy-Item .github release-source/JTSN_v5.66_FULL_SOURCE/.github -Recurse
+          Compress-Archive -Path release-source/JTSN_v5.66_FULL_SOURCE -DestinationPath JTSN_v5.66_FULL_SOURCE.zip
+          $installerHash=(Get-FileHash installer/JTSN_Setup_v5.66.exe -Algorithm SHA256).Hash.ToLower()
+          $sourceHash=(Get-FileHash JTSN_v5.66_FULL_SOURCE.zip -Algorithm SHA256).Hash.ToLower()
+          @(
+            "$installerHash  JTSN_Setup_v5.66.exe"
+            "$sourceHash  JTSN_v5.66_FULL_SOURCE.zip"
+          ) | Set-Content -Encoding ascii JTSN_v5.66_SHA256SUMS.txt
+          @"
+          ## v5.66
+
+          - 설치창 UI 전면 개선: 여백·타이포·실제 JT/SN 아이콘·상태 영역·버튼 디자인 정리
+          - Windows Common Controls v6 및 DPI 대응 매니페스트 적용
+          - 설치 패키지 내부 본체 파일명을 버전별로 하드코딩하던 구조 제거
+          - 설치파일에 포함된 JTSN 본체를 자동 탐색하여 실행하도록 변경
+          - 빌드 시 내장 본체가 정확히 1개인지와 SHA-256 일치 여부 자동 검증
+          - 실행 우선/백그라운드 업데이트 정책 유지
+          "@ | Set-Content -Encoding utf8 RELEASE_NOTES.md
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v5.66 installer/JTSN_Setup_v5.66.exe JTSN_v5.66_FULL_SOURCE.zip JTSN_v5.66_SHA256SUMS.txt --target main --title "JTSN v5.66" --notes-file RELEASE_NOTES.md --latest
