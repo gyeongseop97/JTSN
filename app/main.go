@@ -244,6 +244,7 @@ const (
 	ID_SETTINGS_COMPACT     = 644
 	ID_SETTINGS_CLIP        = 645
 	ID_SETTINGS_HOTKEY_EDIT = 646
+	ID_SETTINGS_UPDATE      = 647
 	ID_FAVORITES_LIST       = 650
 	ID_FAVORITES_UP         = 651
 	ID_FAVORITES_DOWN       = 652
@@ -723,6 +724,24 @@ var colorMailbox string
 var errorMailbox string
 var updateCheckMu sync.Mutex
 var updateCheckRunning bool
+
+func checkForUpdateManually() {
+	base := os.Getenv("LOCALAPPDATA")
+	if base == "" {
+		errorBox("설치 경로를 확인하지 못해 업데이트를 조회할 수 없습니다.")
+		return
+	}
+	launcher := filepath.Join(base, "Programs", "JTSN", "JTSN.exe")
+	if st, err := os.Stat(launcher); err != nil || st.IsDir() {
+		errorBox("설치된 JTSN 업데이트 프로그램을 찾지 못했습니다.\n\nJTSN 설치파일로 다시 설치한 뒤 이용해 주세요.")
+		return
+	}
+	cmd := exec.Command(launcher, "--manual-update-check", strconv.Itoa(os.Getpid()))
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	if err := cmd.Start(); err != nil {
+		errorBox("업데이트 확인을 시작하지 못했습니다.\n\n" + err.Error())
+	}
+}
 
 func checkForUpdateInBackground() {
 	updateCheckMu.Lock()
@@ -2070,9 +2089,41 @@ func resizeLauncher(hwnd syscall.Handle) {
 	procSetWindowPos.Call(uintptr(hwnd), 0, 0, 0, uintptr(w), uintptr(h), SWP_NOMOVE|SWP_NOZORDER)
 }
 
-const appVersion = "5.66"
+const appVersion = "5.67"
 
-const latestPatchNotes = `v5.63
+const latestPatchNotes = `v5.67
+
+• 설정 화면에 '업데이트 확인' 버튼 추가
+• 현재 버전과 GitHub 최신 릴리스를 사용자가 직접 비교할 수 있도록 개선
+• 새 버전이 있으면 즉시 업데이트로 연결하고, 최신 상태·조회 오류도 명확히 안내
+• 자동 업데이트 기능은 기존 방식 그대로 유지
+• 누락됐던 v5.64~v5.66 프로그램 내부 패치노트 보완
+
+v5.66
+
+• 설치창 UI 전면 개선: 여백·타이포·실제 JT/SN 아이콘·상태 영역·버튼 디자인 정리
+• Windows Common Controls v6 및 DPI 대응 매니페스트 적용
+• 설치 패키지 내부 본체 파일명을 버전별로 하드코딩하던 구조 제거
+• 설치파일에 포함된 JTSN 본체를 자동 탐색하여 실행하도록 변경
+• 빌드 시 내장 본체가 정확히 1개인지와 SHA-256 일치 여부 자동 검증
+• 실행 우선/백그라운드 업데이트 정책 유지
+
+v5.65
+
+• 실행 우선 정책 적용: 프로그램을 먼저 연 뒤 업데이트 확인
+• GitHub 연결 실패·업데이트 서버 지연과 무관하게 잡툴사니 실행 보장
+• 실행 후 약 15초 뒤 백그라운드에서 최신 버전 확인
+• 새 버전 발견 시 사용자에게 업데이트 여부 안내 후 패치 진행
+• v5.64 투명 JT/SN 로고 유지
+
+v5.64
+
+• 기존 JT/SN 로고 디자인은 그대로 유지하고 흰 배경만 투명 처리
+• 프로그램 창·작업표시줄·실행파일 아이콘을 투명 로고로 교체
+• 설치 프로그램 아이콘 및 브랜드 이미지도 동일 로고로 통일
+• 아이콘 안전 여백을 적용하여 작은 크기에서도 잘림 방지
+
+v5.63
 
 • 실행 중에도 30분마다 새 버전을 자동 확인
 • 새 버전 발견 시 지금 업데이트/나중에 선택 안내
@@ -2466,7 +2517,8 @@ func settingsWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) ui
 			createOwnerButton(hwnd, "미니형", 280, 126, 124, 120, ID_SETTINGS_MINI, BTN_SETTING_OPTION),
 			createOwnerButton(hwnd, "컴팩트형", 412, 126, 124, 120, ID_SETTINGS_COMPACT, BTN_SETTING_OPTION),
 			settingsHotkeyEdit,
-			createOwnerButton(hwnd, "고급 클립보드 설정", 154, 390, 374, 52, ID_SETTINGS_CLIP, BTN_SECONDARY),
+			createOwnerButton(hwnd, "고급 클립보드 설정", 154, 390, 238, 52, ID_SETTINGS_CLIP, BTN_SECONDARY),
+			createOwnerButton(hwnd, "업데이트 확인", 402, 390, 126, 52, ID_SETTINGS_UPDATE, BTN_SECONDARY),
 			createOwnerButton(hwnd, "완료", 414, 474, 110, 40, ID_SETTINGS_APPLY, BTN_PRIMARY),
 		)
 		return 0
@@ -2523,6 +2575,8 @@ func settingsWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) ui
 			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
 		case ID_SETTINGS_CLIP:
 			launchTool(ID_NAV_CLIP)
+		case ID_SETTINGS_UPDATE:
+			checkForUpdateManually()
 		case ID_SETTINGS_APPLY:
 			if applySettingsHotkey(mainHWND) {
 				procDestroyWindow.Call(uintptr(hwnd))

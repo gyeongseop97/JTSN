@@ -24,11 +24,11 @@ import (
 )
 
 const (
-	launcherVersion = "5.66"
+	launcherVersion = "5.67"
 	releaseAPI      = "https://api.github.com/repos/gyeongseop97/JTSN/releases/latest"
 	appFolderName   = "JTSN"
 	installedName   = "JTSN.exe"
-	expectedCoreSHA = "5e86dffacb23ca756c1b732468ea41c907dd19bf9ad082c20afa2a62a15a5d04"
+	expectedCoreSHA = "6235a379b4c321dd497132e7dd8fb756bfcb2aae296b657c47f39a010ae84bbc"
 	wmAppUpdateExit = 0x8000 + 60
 )
 
@@ -198,6 +198,11 @@ func main() {
 		backgroundUpdateCheck(pid)
 		return
 	}
+	if len(os.Args) >= 3 && os.Args[1] == "--manual-update-check" {
+		pid, _ := strconv.Atoi(os.Args[2])
+		manualUpdateCheck(pid)
+		return
+	}
 	if len(os.Args) >= 4 && os.Args[1] == "--apply-update" {
 		applyUpdate(os.Args[2], os.Args[3])
 		return
@@ -252,6 +257,33 @@ func snoozeUpdate(tag string) {
 	p := updateSnoozePath()
 	_ = os.MkdirAll(filepath.Dir(p), 0755)
 	_ = os.WriteFile(p, []byte(tag+"|"+strconv.FormatInt(time.Now().Add(6*time.Hour).Unix(), 10)), 0644)
+}
+
+func manualUpdateCheck(corePID int) {
+	rel, err := latest()
+	if err != nil {
+		message("최신 버전을 확인하지 못했습니다.\n\n인터넷 연결 또는 GitHub 접속 상태를 확인해 주세요.\n\n"+err.Error(), 0x10)
+		return
+	}
+	if !newer(rel.Tag, launcherVersion) {
+		message(fmt.Sprintf("현재 v%s은 최신 버전입니다.\n\n설치된 JTSN을 그대로 사용하시면 됩니다.", launcherVersion), 0x40)
+		return
+	}
+	body := strings.TrimSpace(rel.Body)
+	if len([]rune(body)) > 480 {
+		body = string([]rune(body)[:480]) + "…"
+	}
+	content := fmt.Sprintf("현재 버전 v%s  →  최신 버전 %s\n\n새 버전이 있습니다. 지금 업데이트하시겠습니까?", launcherVersion, rel.Tag)
+	if body != "" {
+		content += "\n\n" + body
+	}
+	if !askUpdate("새로운 JTSN을 사용할 수 있습니다", content) {
+		return
+	}
+	updateCorePID = corePID
+	if err := runUpdateProgress(rel); err != nil {
+		message("업데이트에 실패했습니다. 실행 중인 버전은 그대로 유지됩니다.\n\n"+err.Error(), 0x10)
+	}
 }
 
 func backgroundUpdateCheck(corePID int) {
