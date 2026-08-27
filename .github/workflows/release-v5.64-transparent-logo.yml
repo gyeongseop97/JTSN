@@ -1,0 +1,187 @@
+name: Publish JTSN v5.64 Transparent Logo
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.branding/release-v5.64.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Prepare exact transparent JTSN branding
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check pillow
+          @'
+          from PIL import Image
+          from pathlib import Path
+
+          src = Image.open('app/jtsn.ico').convert('RGBA')
+          if src.size != (256, 256):
+              src = src.resize((256, 256), Image.Resampling.LANCZOS)
+
+          px = list(src.getdata())
+          cleaned = []
+          for r, g, b, old_a in px:
+              # The supplied logo was composited over pure white. Remove only
+              # that white matte and preserve the original JT/SN artwork.
+              diff = max(255-r, 255-g, 255-b)
+              if diff <= 2:
+                  a = 0
+              elif diff >= 16:
+                  a = 255
+              else:
+                  a = int(round((diff - 2) * 255 / 14))
+              a = min(a, old_a)
+              if a == 0:
+                  cleaned.append((0, 0, 0, 0))
+                  continue
+              af = a / 255.0
+              rr = int(max(0, min(255, round((r - (1-af)*255) / af))))
+              gg = int(max(0, min(255, round((g - (1-af)*255) / af))))
+              bb = int(max(0, min(255, round((b - (1-af)*255) / af))))
+              cleaned.append((rr, gg, bb, a))
+
+          transparent = Image.new('RGBA', src.size)
+          transparent.putdata(cleaned)
+          bbox = transparent.getbbox()
+          if not bbox:
+              raise RuntimeError('Could not detect JTSN logo foreground')
+
+          # Keep generous safe margins so the logo is never cropped in the
+          # taskbar, title bar, installer or compact launcher modes.
+          trimmed = transparent.crop(bbox)
+          canvas = Image.new('RGBA', (256, 256), (0, 0, 0, 0))
+          max_dim = round(256 * 0.88)
+          scale = min(max_dim / trimmed.width, max_dim / trimmed.height)
+          size = (max(1, round(trimmed.width*scale)), max(1, round(trimmed.height*scale)))
+          logo = trimmed.resize(size, Image.Resampling.LANCZOS)
+          canvas.alpha_composite(logo, ((256-size[0])//2, (256-size[1])//2))
+
+          # Master transparent PNGs used by the app/installer package.
+          canvas.save('app/jtsn_icon_master.png', optimize=True)
+          canvas.save('app/jtsn_logo_full.png', optimize=True)
+          canvas.save('installer/assets/JTSN_logo_transparent.png', optimize=True)
+
+          # Multi-resolution Windows icon with alpha transparency.
+          icon_sizes = [(16,16),(20,20),(24,24),(32,32),(40,40),(48,48),(64,64),(128,128),(256,256)]
+          canvas.save('app/jtsn.ico', format='ICO', sizes=icon_sizes)
+          Path('installer/assets/JTSN.ico').write_bytes(Path('app/jtsn.ico').read_bytes())
+
+          # The current launcher paints this legacy bitmap onto a white sidebar
+          # using BitBlt. Composite the transparent mark onto that exact sidebar
+          # colour so there is no visible white box while preserving old code.
+          brand = canvas.resize((112,112), Image.Resampling.LANCZOS)
+          bmp = Image.new('RGB', (112,112), (255,255,255))
+          bmp.paste(brand, (0,0), brand.getchannel('A'))
+          bmp.save('app/jtsn_brand.bmp', format='BMP')
+          '@ | Set-Content -Encoding utf8 prepare_brand.py
+          python prepare_brand.py
+
+      - name: Rebuild Windows icon resources
+        shell: pwsh
+        run: |
+          go install github.com/akavel/rsrc@latest
+          $rsrc = Join-Path (go env GOPATH) 'bin\rsrc.exe'
+          & $rsrc -manifest app/app.manifest -ico app/jtsn.ico -o app/rsrc_windows_amd64.syso
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to rebuild app icon resource' }
+          & $rsrc -ico installer/assets/JTSN.ico -o installer/rsrc_windows_amd64.syso
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to rebuild installer icon resource' }
+
+      - name: Update source version to v5.64
+        shell: pwsh
+        run: |
+          $app = Get-Content app/main.go -Raw
+          $app = [regex]::Replace($app, 'const appVersion = "[0-9.]+"', 'const appVersion = "5.64"', 1)
+          Set-Content app/main.go -Value $app -Encoding utf8
+
+          $installer = Get-Content installer/main.go -Raw
+          $installer = [regex]::Replace($installer, 'launcherVersion = "[0-9.]+"', 'launcherVersion = "5.64"', 1)
+          Set-Content installer/main.go -Value $installer -Encoding utf8
+
+      - name: Commit transparent branding to main
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/jtsn.ico app/jtsn_icon_master.png app/jtsn_logo_full.png app/jtsn_brand.bmp app/rsrc_windows_amd64.syso installer/assets/JTSN.ico installer/assets/JTSN_logo_transparent.png installer/rsrc_windows_amd64.syso app/main.go installer/main.go
+          if (-not (git diff --cached --quiet)) {
+            git commit -m 'Apply transparent JTSN logo across app and installer'
+            git push origin HEAD:main
+          }
+
+      - name: Build application
+        shell: pwsh
+        working-directory: app
+        run: |
+          gofmt -w .
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_v5.64.exe .
+          $coreHash=(Get-FileHash JTSN_v5.64.exe -Algorithm SHA256).Hash.ToLower()
+          "CORE_SHA256=$coreHash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          Copy-Item app/JTSN_v5.64.exe installer/core/JTSN_v5.64.exe -Force
+          $source = Get-Content installer/main.go -Raw
+          $source = [regex]::Replace($source, 'core/JTSN_v[0-9.]+\.exe', 'core/JTSN_v5.64.exe', 1)
+          $source = [regex]::Replace($source, 'expectedCoreSHA = "[0-9a-f]+"', "expectedCoreSHA = `"$env:CORE_SHA256`"")
+          Set-Content installer/main.go -Value $source -Encoding utf8
+          Push-Location installer
+          gofmt -w main.go
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_Setup_v5.64.exe .
+          Pop-Location
+
+      - name: Package source and checksums
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release-source/JTSN_v5.64_FULL_SOURCE | Out-Null
+          Copy-Item app release-source/JTSN_v5.64_FULL_SOURCE/app -Recurse
+          Copy-Item installer release-source/JTSN_v5.64_FULL_SOURCE/installer -Recurse
+          Remove-Item release-source/JTSN_v5.64_FULL_SOURCE/app/JTSN_v5.64.exe -Force
+          Remove-Item release-source/JTSN_v5.64_FULL_SOURCE/installer/JTSN_Setup_v5.64.exe -Force
+          Get-ChildItem release-source/JTSN_v5.64_FULL_SOURCE/installer/core -Filter '*.exe' | Remove-Item -Force
+          Copy-Item .github release-source/JTSN_v5.64_FULL_SOURCE/.github -Recurse
+          Compress-Archive -Path release-source/JTSN_v5.64_FULL_SOURCE -DestinationPath JTSN_v5.64_FULL_SOURCE.zip
+          $installerHash=(Get-FileHash installer/JTSN_Setup_v5.64.exe -Algorithm SHA256).Hash.ToLower()
+          $sourceHash=(Get-FileHash JTSN_v5.64_FULL_SOURCE.zip -Algorithm SHA256).Hash.ToLower()
+          @(
+            "$installerHash  JTSN_Setup_v5.64.exe"
+            "$sourceHash  JTSN_v5.64_FULL_SOURCE.zip"
+          ) | Set-Content -Encoding ascii JTSN_v5.64_SHA256SUMS.txt
+          @"
+          ## v5.64
+
+          - 기존 JT/SN 로고 디자인은 그대로 유지하고 흰 배경만 투명 처리
+          - 프로그램 창·작업표시줄·실행파일 아이콘을 투명 로고로 교체
+          - 설치 프로그램 아이콘 및 브랜드 이미지도 동일 로고로 통일
+          - 아이콘 안전 여백을 적용하여 작은 크기에서도 잘림 방지
+          "@ | Set-Content -Encoding utf8 RELEASE_NOTES.md
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v5.64 installer/JTSN_Setup_v5.64.exe JTSN_v5.64_FULL_SOURCE.zip JTSN_v5.64_SHA256SUMS.txt --target main --title "JTSN v5.64" --notes-file RELEASE_NOTES.md --latest
