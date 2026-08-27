@@ -1,7 +1,0 @@
-diff --git a/.v563-build-marker b/.v563-build-marker
-new file mode 100644
-index 0000000..5b64f5d
---- /dev/null
-+++ b/.v563-build-marker
-@@ -0,0 +1 @@
-+v5.63 direct source build
