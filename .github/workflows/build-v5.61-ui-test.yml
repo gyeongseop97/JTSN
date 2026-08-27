@@ -54,9 +54,10 @@ jobs:
           Get-ChildItem release-source/JTSN_v5.63_FULL_SOURCE/installer/core -Filter '*.exe' | Remove-Item -Force
           Copy-Item .github release-source/JTSN_v5.63_FULL_SOURCE/.github -Recurse
           Compress-Archive -Path release-source/JTSN_v5.63_FULL_SOURCE -DestinationPath JTSN_v5.63_FULL_SOURCE.zip
+          $installerHash=(Get-FileHash installer/JTSN_Setup_v5.63.exe -Algorithm SHA256).Hash.ToLower()
           $sourceHash=(Get-FileHash JTSN_v5.63_FULL_SOURCE.zip -Algorithm SHA256).Hash.ToLower()
           @(
-            "$hash  JTSN_Setup_v5.63.exe"
+            "$installerHash  JTSN_Setup_v5.63.exe"
             "$sourceHash  JTSN_v5.63_FULL_SOURCE.zip"
           ) | Set-Content -Encoding ascii JTSN_v5.63_SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
