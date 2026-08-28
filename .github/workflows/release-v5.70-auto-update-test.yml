@@ -1,0 +1,70 @@
+name: Publish JTSN v5.70 Auto Update Test
+
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.release/release-v5.70.trigger']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+      - name: Verify and build
+        shell: pwsh
+        run: |
+          gofmt -w app/main.go installer/main.go
+          $app = Get-Content app/main.go -Raw
+          $setup = Get-Content installer/main.go -Raw
+          if ($app -notmatch 'const appVersion = "5\.70"') { throw 'app version mismatch' }
+          if ($app -notmatch 'const latestPatchNotes = `v5\.70') { throw 'patch notes mismatch' }
+          if ($setup -notmatch 'launcherVersion = "5\.70"') { throw 'installer version mismatch' }
+          if ($setup -notmatch 'func replaceInstalledFile') { throw 'safe replacement missing' }
+          Push-Location app
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_v5.70.exe .
+          Pop-Location
+          $hash=(Get-FileHash app/JTSN_v5.70.exe -Algorithm SHA256).Hash.ToLower()
+          Get-ChildItem installer/core -Filter '*.exe' -ErrorAction SilentlyContinue | Remove-Item -Force
+          Copy-Item app/JTSN_v5.70.exe installer/core/JTSN_v5.70.exe
+          $source = Get-Content installer/main.go -Raw
+          $source = [regex]::Replace($source, 'expectedCoreSHA = "[0-9a-f]*"', "expectedCoreSHA = `"$hash`"", 1)
+          Set-Content installer/main.go -Value $source -Encoding utf8
+          gofmt -w installer/main.go
+          Push-Location installer
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_Setup_v5.70.exe .
+          Pop-Location
+          if ((Get-Item installer/JTSN_Setup_v5.70.exe).Length -lt 1000000) { throw 'installer binary unexpectedly small' }
+      - name: Package release
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release-source/JTSN_v5.70_FULL_SOURCE | Out-Null
+          Copy-Item app,installer,.github,scripts release-source/JTSN_v5.70_FULL_SOURCE -Recurse
+          Copy-Item README.md,RELEASE_POLICY.md release-source/JTSN_v5.70_FULL_SOURCE
+          Get-ChildItem release-source/JTSN_v5.70_FULL_SOURCE -Filter '*.exe' -Recurse | Remove-Item -Force
+          Compress-Archive -Path release-source/JTSN_v5.70_FULL_SOURCE -DestinationPath JTSN_v5.70_FULL_SOURCE.zip
+          $installerHash=(Get-FileHash installer/JTSN_Setup_v5.70.exe -Algorithm SHA256).Hash.ToLower()
+          $sourceHash=(Get-FileHash JTSN_v5.70_FULL_SOURCE.zip -Algorithm SHA256).Hash.ToLower()
+          @("$installerHash  JTSN_Setup_v5.70.exe", "$sourceHash  JTSN_v5.70_FULL_SOURCE.zip") | Set-Content -Encoding ascii JTSN_v5.70_SHA256SUMS.txt
+          @(
+            '## v5.70 자동 업데이트 테스트', '',
+            '- v5.69에서 실행 중 자동 업데이트 알림 동작 확인용 릴리스',
+            '- 다운로드, SHA-256 검증, 안전한 파일 교체, 자동 재실행 전 과정 테스트',
+            '- 기능 변경 없이 버전과 패치노트만 갱신'
+          ) | Set-Content -Encoding utf8 RELEASE_NOTES.md
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create v5.70 installer/JTSN_Setup_v5.70.exe JTSN_v5.70_FULL_SOURCE.zip JTSN_v5.70_SHA256SUMS.txt --target main --title "JTSN v5.70 Auto Update Test" --notes-file RELEASE_NOTES.md --latest
