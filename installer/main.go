@@ -24,11 +24,11 @@ import (
 )
 
 const (
-	launcherVersion = "5.74"
+	launcherVersion = "5.75"
 	releaseAPI      = "https://api.github.com/repos/gyeongseop97/JTSN/releases/latest"
 	appFolderName   = "JTSN"
 	installedName   = "JTSN.exe"
-	expectedCoreSHA = "28a8cf11bf50ee7964eca562c790bd5eb3807ffd38b84c5d58d63f3fa9e3c5f5"
+	expectedCoreSHA = "455a906c5158a683a4cbfd15c3e1a5bdd00b386bd16dd03305aba32b2153fe77"
 	wmAppUpdateExit = 0x8000 + 60
 )
 

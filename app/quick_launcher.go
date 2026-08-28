@@ -22,9 +22,9 @@ const (
 	quickVKReturn               = 0x0D
 	quickWSExTopmost            = 0x00000008
 	quickWSExToolWindow         = 0x00000080
-	quickOuterDiameter          = 430
-	quickOuterRadius            = 205
-	quickInnerRadius            = 74
+	quickOuterDiameter          = 390
+	quickOuterRadius            = 190
+	quickInnerRadius            = 70
 	quickMaxFavorites           = 8
 	quickFavoriteButtonBase     = 8100
 	quickFavoriteSaveID         = 8180
@@ -64,7 +64,7 @@ func ensureQuickLauncherClass() bool {
 		HInstance:     syscall.Handle(hInst),
 		HIcon:         appIconBig,
 		HIconSm:       appIconSmall,
-		HbrBackground: brushPanel,
+		HbrBackground: 0,
 		LpszClassName: p16(quickClassName),
 	}
 	procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
@@ -143,11 +143,16 @@ func saveQuickFavorites(ids []int) {
 }
 
 func quickApplyDonutRegion(hwnd syscall.Handle) {
-	outer, _, _ := procQuickCreateEllipticRgn.Call(0, 0, quickOuterDiameter+1, quickOuterDiameter+1)
-	innerLeft := quickOuterDiameter/2 - quickInnerRadius
-	innerTop := quickOuterDiameter/2 - quickInnerRadius
-	innerRight := quickOuterDiameter/2 + quickInnerRadius + 1
-	innerBottom := quickOuterDiameter/2 + quickInnerRadius + 1
+	center := quickOuterDiameter / 2
+	outerLeft := center - quickOuterRadius
+	outerTop := center - quickOuterRadius
+	outerRight := center + quickOuterRadius + 1
+	outerBottom := center + quickOuterRadius + 1
+	outer, _, _ := procQuickCreateEllipticRgn.Call(uintptr(outerLeft), uintptr(outerTop), uintptr(outerRight), uintptr(outerBottom))
+	innerLeft := center - quickInnerRadius
+	innerTop := center - quickInnerRadius
+	innerRight := center + quickInnerRadius + 1
+	innerBottom := center + quickInnerRadius + 1
 	inner, _, _ := procQuickCreateEllipticRgn.Call(uintptr(innerLeft), uintptr(innerTop), uintptr(innerRight), uintptr(innerBottom))
 	if outer == 0 || inner == 0 {
 		if outer != 0 {
@@ -205,7 +210,6 @@ func showQuickLauncher() {
 		return
 	}
 	quickApplyDonutRegion(quickHWND)
-	enableNativeWindowShadow(quickHWND)
 	procShowWindow.Call(uintptr(quickHWND), SW_SHOW)
 	procSetForegroundWindow.Call(uintptr(quickHWND))
 	procSetFocus.Call(uintptr(quickHWND))
@@ -250,7 +254,7 @@ func quickExecuteSegment(idx int) {
 }
 
 func quickRingPolygon(cx, cy float64, inner, outer float64, start, end float64) []POINT {
-	steps := 18
+	steps := 48
 	pts := make([]POINT, 0, (steps+1)*2)
 	for i := 0; i <= steps; i++ {
 		a := start + (end-start)*float64(i)/float64(steps)
@@ -265,6 +269,34 @@ func quickRingPolygon(cx, cy float64, inner, outer float64, start, end float64) 
 	return pts
 }
 
+func quickToolLabel(id int) string {
+	switch id {
+	case ID_NAV_PRINT:
+		return "프린터"
+	case ID_NAV_PDF:
+		return "PDF"
+	case ID_NAV_RENAME:
+		return "파일명 변경"
+	case ID_NAV_FOLDERS:
+		return "폴더 도구"
+	case ID_NAV_DUP:
+		return "중복파일"
+	case ID_NAV_IMAGE:
+		return "이미지"
+	case ID_NAV_COLOR:
+		return "스포이드"
+	case ID_NAV_TEXT:
+		return "텍스트"
+	case ID_NAV_CLIP:
+		return "클립보드"
+	case ID_NAV_BUNDLE:
+		return "새 폴더"
+	case ID_NAV_OCR:
+		return "화면 OCR"
+	default:
+		return toolName(id)
+	}
+}
 func quickDrawCenteredText(hdc syscall.Handle, text string, cx, cy, w, h int32, font syscall.Handle, color uintptr) {
 	rc := RECT{Left: cx - w/2, Top: cy - h/2, Right: cx + w/2, Bottom: cy + h/2}
 	procSetBkMode.Call(uintptr(hdc), TRANSPARENT)
@@ -283,6 +315,12 @@ func paintQuickLauncher(hwnd syscall.Handle) {
 	}
 	defer procEndPaint.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&ps)))
 
+	var client RECT
+	procGetClientRect.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&client)))
+	base := solidBrush(250, 252, 255)
+	procFillRect.Call(hdc, uintptr(unsafe.Pointer(&client)), uintptr(base))
+	procDeleteObject.Call(uintptr(base))
+
 	cx := float64(quickOuterDiameter) / 2
 	cy := float64(quickOuterDiameter) / 2
 	n := len(quickMenuTools)
@@ -293,17 +331,22 @@ func paintQuickLauncher(hwnd syscall.Handle) {
 	for i, id := range quickMenuTools {
 		start := float64(i)*span - span/2
 		end := start + span
-		pts := quickRingPolygon(cx, cy, float64(quickInnerRadius), float64(quickOuterRadius), start, end)
+		inner := float64(quickInnerRadius) + 1
+		outer := float64(quickOuterRadius) - 1
+		pts := quickRingPolygon(cx, cy, inner, outer, start, end)
 		if len(pts) == 0 {
 			continue
 		}
-		fill := solidBrush(248, 250, 252)
-		textColor := rgb(30, 41, 59)
+
+		fill := solidBrush(250, 252, 255)
+		textColor := rgb(51, 65, 85)
+		lineColor := rgb(226, 232, 240)
 		if i == quickHover {
-			fill = solidBrush(219, 234, 254)
+			fill = solidBrush(232, 240, 254)
 			textColor = rgb(30, 64, 175)
+			lineColor = rgb(191, 219, 254)
 		}
-		pen, _, _ := procCreatePen.Call(PS_SOLID, 1, rgb(203, 213, 225))
+		pen, _, _ := procCreatePen.Call(PS_SOLID, 1, lineColor)
 		oldBrush, _, _ := procSelectObject.Call(uintptr(hdc), uintptr(fill))
 		oldPen, _, _ := procSelectObject.Call(uintptr(hdc), pen)
 		procQuickPolygon.Call(uintptr(hdc), uintptr(unsafe.Pointer(&pts[0])), uintptr(len(pts)))
@@ -314,17 +357,15 @@ func paintQuickLauncher(hwnd syscall.Handle) {
 
 		mid := float64(i) * span
 		r := (mid - 90) * math.Pi / 180
-		iconR := 121.0
-		textR := 158.0
-		ix := int32(math.Round(cx + iconR*math.Cos(r)))
-		iy := int32(math.Round(cy + iconR*math.Sin(r)))
-		tx := int32(math.Round(cx + textR*math.Cos(r)))
-		ty := int32(math.Round(cy + textR*math.Sin(r)))
-		drawToolBitmap(syscall.Handle(hdc), id, ix-16, iy-16, 32)
-		quickDrawCenteredText(syscall.Handle(hdc), toolName(id), tx, ty, 118, 28, fontSmall, textColor)
+		anchorR := (float64(quickInnerRadius) + float64(quickOuterRadius)) / 2
+		ax := int32(math.Round(cx + anchorR*math.Cos(r)))
+		ay := int32(math.Round(cy + anchorR*math.Sin(r)))
+
+		iconSize := int32(28)
+		drawToolBitmap(syscall.Handle(hdc), id, ax-iconSize/2, ay-31, iconSize)
+		quickDrawCenteredText(syscall.Handle(hdc), quickToolLabel(id), ax, ay+24, 102, 24, fontSmall, textColor)
 	}
 }
-
 func quickLauncherWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) uintptr {
 	switch msg {
 	case quickWMMouseMove:

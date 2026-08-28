@@ -2118,9 +2118,17 @@ func resizeLauncher(hwnd syscall.Handle) {
 	procSetWindowPos.Call(uintptr(hwnd), 0, 0, 0, uintptr(w), uintptr(h), SWP_NOMOVE|SWP_NOZORDER)
 }
 
-const appVersion = "5.74"
+const appVersion = "5.75"
 
-const latestPatchNotes = `v5.74
+const latestPatchNotes = `v5.75
+
+• 퀵런처의 사각 팝업 배경과 네이티브 사각 그림자 완전 제거
+• 실제 윈도우 영역을 도넛 외곽/내곽 반지름과 정확히 일치하도록 수정
+• 도넛 크기와 두께를 다듬고 조각 경계를 더 얇고 부드럽게 조정
+• 기능 아이콘과 짧은 기능명을 각 조각 중앙에 세로 정렬
+• 화면 OCR·클립보드·스포이드·PDF·중복파일·파일명 변경 등 퀵런처용 축약명 적용
+
+v5.74
 
 • 검색형 퀵런처를 마우스 중심 도넛형 방사 메뉴로 변경
 • 도넛을 피자 조각처럼 분할해 각 조각 클릭 시 기능 즉시 실행
@@ -2217,6 +2225,12 @@ v5.62
 • 모니터 DPI 변경 시 창 크기와 UI를 다시 계산`
 
 const allPatchNotes = `잡툴사니 · JTSN 패치노트
+
+v5.75
+• 퀵런처 사각 배경과 네이티브 사각 그림자 제거
+• 실제 클릭/표시 영역을 도넛 형태와 정확히 일치하도록 수정
+• 조각 그래픽·아이콘·텍스트 정렬 전면 개선
+• 퀵런처용 짧은 기능명 적용
 
 v5.74
 • 검색형 퀵런처를 마우스 중심 도넛형 방사 메뉴로 변경
