@@ -1,0 +1,123 @@
+name: Publish JTSN v5.76 Space Hotkey Support
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.release/release-v5.76.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+
+      - name: Patch v5.76 source
+        shell: pwsh
+        run: |
+          function Replace-One([string]$text, [string]$pattern, [string]$replacement, [string]$label) {
+            $count = [regex]::Matches($text, $pattern).Count
+            if ($count -ne 1) { throw "$label expected exactly one match, got $count" }
+            return [regex]::Replace($text, $pattern, $replacement, 1)
+          }
+
+          $appPath = 'app/main.go'
+          $app = Get-Content $appPath -Raw
+          $app = Replace-One $app 'const appVersion = "5\.75"' 'const appVersion = "5.76"' 'app version'
+          $latestHeader = "const latestPatchNotes = ``v5.76`r`n`r`n• 퀵런처 단축키 입력에서 Space 키 지원`r`n• Ctrl+Alt+Space 조합을 정상 저장·등록 가능하도록 수정`r`n• 신규 기본 퀵런처 단축키를 Ctrl+Alt+Space로 변경`r`n• 기존 사용자가 저장한 단축키 설정은 그대로 유지`r`n`r`nv5.75"
+          $app = Replace-One $app 'const latestPatchNotes = `v5\.75' $latestHeader 'latest patch notes'
+          $allHeader = "const allPatchNotes = ``잡툴사니 · JTSN 패치노트`r`n`r`nv5.76`r`n• 퀵런처 단축키 Space 키 지원`r`n• Ctrl+Alt+Space 조합 저장·등록 지원`r`n• 신규 기본 단축키 Ctrl+Alt+Space 적용`r`n`r`nv5.75"
+          $app = Replace-One $app 'const allPatchNotes = `잡툴사니 · JTSN 패치노트\r?\n\r?\nv5\.75' $allHeader 'all patch notes'
+          Set-Content $appPath -Value $app -Encoding utf8
+
+          $trayPath = 'app/tray.go'
+          $tray = Get-Content $trayPath -Raw
+          $tray = Replace-One $tray 'launcherHotkey\s+= "Ctrl\+Shift\+J"' 'launcherHotkey           = "Ctrl+Alt+Space"' 'default launcher hotkey'
+          $tray = Replace-One $tray '(func capturedKeyName\(vk uint32\) string \{\r?\n)' '$1`tif vk == 0x20 {`r`n`t`treturn "Space"`r`n`t}`r`n' 'Space capture support'
+          $tray = Replace-One $tray '(func hotkeyVK\(s string\) uint32 \{\r?\n)' '$1`tif s == "SPACE" {`r`n`t`treturn 0x20`r`n`t}`r`n' 'Space VK support'
+          $tray = $tray.Replace('예: Ctrl+J / Ctrl+Shift+J / Ctrl+J,T', '예: Ctrl+Alt+Space / Ctrl+Shift+J / Ctrl+J,T')
+          Set-Content $trayPath -Value $tray -Encoding utf8
+
+          $installerPath = 'installer/main.go'
+          $installer = Get-Content $installerPath -Raw
+          $installer = Replace-One $installer 'launcherVersion = "5\.75"' 'launcherVersion = "5.76"' 'launcher version'
+          Set-Content $installerPath -Value $installer -Encoding utf8
+
+          gofmt -w app/main.go app/tray.go installer/main.go
+
+          $check = Get-Content app/tray.go -Raw
+          if ($check -notmatch 'return "Space"') { throw 'Space capture support missing' }
+          if ($check -notmatch 'if s == "SPACE"') { throw 'Space VK parser support missing' }
+          if ($check -notmatch 'launcherHotkey\s+= "Ctrl\+Alt\+Space"') { throw 'default hotkey patch failed' }
+
+      - name: Build application
+        shell: pwsh
+        working-directory: app
+        run: |
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_v5.76.exe .
+
+      - name: Prepare and build installer
+        shell: pwsh
+        run: |
+          $hash=(Get-FileHash app/JTSN_v5.76.exe -Algorithm SHA256).Hash.ToLower()
+          Get-ChildItem installer/core -Filter '*.exe' -ErrorAction SilentlyContinue | Remove-Item -Force
+          Copy-Item app/JTSN_v5.76.exe installer/core/JTSN_v5.76.exe -Force
+          $source = Get-Content installer/main.go -Raw
+          $source = [regex]::Replace($source, 'expectedCoreSHA = "[0-9a-f]*"', "expectedCoreSHA = `"$hash`"", 1)
+          Set-Content installer/main.go -Value $source -Encoding utf8
+          gofmt -w installer/main.go
+          Push-Location installer
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_Setup_v5.76.exe .
+          Pop-Location
+          if ((Get-Item installer/JTSN_Setup_v5.76.exe).Length -lt 1000000) { throw 'installer binary unexpectedly small' }
+
+      - name: Persist v5.76 source to main
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/main.go app/tray.go installer/main.go
+          if (-not (git diff --cached --quiet)) {
+            git commit -m 'Support Space in launcher hotkeys in v5.76'
+            git push origin HEAD:main
+          }
+
+      - name: Package release
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release-source/JTSN_v5.76_FULL_SOURCE | Out-Null
+          Copy-Item app,installer,.github,scripts release-source/JTSN_v5.76_FULL_SOURCE -Recurse
+          Copy-Item README.md,RELEASE_POLICY.md release-source/JTSN_v5.76_FULL_SOURCE
+          Get-ChildItem release-source/JTSN_v5.76_FULL_SOURCE -Filter '*.exe' -Recurse | Remove-Item -Force
+          Compress-Archive -Path release-source/JTSN_v5.76_FULL_SOURCE -DestinationPath JTSN_v5.76_FULL_SOURCE.zip
+          $installerHash=(Get-FileHash installer/JTSN_Setup_v5.76.exe -Algorithm SHA256).Hash.ToLower()
+          $sourceHash=(Get-FileHash JTSN_v5.76_FULL_SOURCE.zip -Algorithm SHA256).Hash.ToLower()
+          "$installerHash  JTSN_Setup_v5.76.exe" | Set-Content -Encoding ascii JTSN_Setup_v5.76.exe.sha256.txt
+          @("$installerHash  JTSN_Setup_v5.76.exe", "$sourceHash  JTSN_v5.76_FULL_SOURCE.zip") | Set-Content -Encoding ascii JTSN_v5.76_SHA256SUMS.txt
+          @(
+            '## v5.76 퀵런처 단축키 개선', '',
+            '- 단축키 입력에서 Space 키 지원',
+            '- Ctrl+Alt+Space 조합 정상 저장 및 전역 등록',
+            '- 신규 기본 퀵런처 단축키를 Ctrl+Alt+Space로 변경',
+            '- 기존 저장 단축키는 그대로 유지'
+          ) | Set-Content -Encoding utf8 RELEASE_NOTES.md
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v5.76 installer/JTSN_Setup_v5.76.exe JTSN_Setup_v5.76.exe.sha256.txt JTSN_v5.76_FULL_SOURCE.zip JTSN_v5.76_SHA256SUMS.txt --target main --title "JTSN v5.76 Space Hotkey Support" --notes-file RELEASE_NOTES.md --latest
