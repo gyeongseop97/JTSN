@@ -330,7 +330,7 @@ func launcherHotkeyMessage(hwnd syscall.Handle, id uintptr) bool {
 	}
 	if id == ID_HOTKEY_PRIMARY {
 		if hotkeySecondaryVK == 0 {
-			showLauncherFromTray()
+			showQuickLauncher()
 		} else {
 			procUnregisterHotKeyTray.Call(uintptr(hwnd), ID_HOTKEY_SECONDARY)
 			procRegisterHotKeyTray.Call(uintptr(hwnd), ID_HOTKEY_SECONDARY, 0, uintptr(hotkeySecondaryVK))
@@ -341,7 +341,7 @@ func launcherHotkeyMessage(hwnd syscall.Handle, id uintptr) bool {
 	}
 	if id == ID_HOTKEY_SECONDARY && hotkeySequenceActive {
 		finishHotkeySequence(hwnd)
-		showLauncherFromTray()
+		showQuickLauncher()
 		return true
 	}
 	return false

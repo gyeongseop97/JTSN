@@ -2118,9 +2118,16 @@ func resizeLauncher(hwnd syscall.Handle) {
 	procSetWindowPos.Call(uintptr(hwnd), 0, 0, 0, uintptr(w), uintptr(h), SWP_NOMOVE|SWP_NOZORDER)
 }
 
-const appVersion = "5.72"
+const appVersion = "5.73"
 
-const latestPatchNotes = `v5.72
+const latestPatchNotes = `v5.73
+
+• 전역 호출 단축키로 즉시 여는 퀵런처 추가
+• 도구명·한글/영문 별칭 검색 후 Enter로 바로 실행
+• 최근 사용·즐겨찾기 기반 기본 추천과 ↑↓ 키보드 이동 지원
+• Esc 또는 포커스 이탈 시 즉시 닫히는 경량 팝업 방식 적용
+
+v5.72
 
 • 자동 업데이트 동작 확인을 위한 테스트 패치
 • v5.71에서 새 버전 감지 팝업과 수동 업데이트 확인 동작 검증
@@ -2202,6 +2209,12 @@ v5.62
 • 모니터 DPI 변경 시 창 크기와 UI를 다시 계산`
 
 const allPatchNotes = `잡툴사니 · JTSN 패치노트
+
+v5.73
+• 전역 호출 단축키로 즉시 여는 퀵런처 추가
+• 도구명·한글/영문 별칭 검색 후 Enter로 바로 실행
+• 최근 사용·즐겨찾기 기반 기본 추천과 ↑↓ 키보드 이동 지원
+• Esc 또는 포커스 이탈 시 즉시 닫히는 경량 팝업 방식 적용
 
 v5.72
 • 자동 업데이트 동작 확인을 위한 테스트 패치
@@ -2742,7 +2755,7 @@ func paintSettingsWindow(hwnd syscall.Handle) {
 	drawSettingsText(syscall.Handle(hdc), "메인 화면", RECT{166, 74, 420, 108}, fontLauncherSection, rgb(17, 24, 39))
 	drawSettingsText(syscall.Handle(hdc), "사용할 메인 화면 형태를 선택하세요.", RECT{166, 102, 500, 126}, fontSmall, rgb(100, 116, 139))
 	drawSettingsText(syscall.Handle(hdc), "선택한 화면은 다음 실행에도 유지됩니다.", RECT{166, 262, 510, 286}, fontSmall, rgb(100, 116, 139))
-	drawSettingsText(syscall.Handle(hdc), "호출 단축키", RECT{166, 292, 420, 322}, fontLauncherSection, rgb(17, 24, 39))
+	drawSettingsText(syscall.Handle(hdc), "퀵런처 호출 단축키", RECT{166, 292, 420, 322}, fontLauncherSection, rgb(17, 24, 39))
 	drawSettingsText(syscall.Handle(hdc), "입력란을 누른 뒤 원하는 키 조합을 누르세요. (최대 3키)", RECT{166, 362, 530, 386}, fontSmall, rgb(100, 116, 139))
 }
 
