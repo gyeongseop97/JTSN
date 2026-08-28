@@ -2120,9 +2120,16 @@ func resizeLauncher(hwnd syscall.Handle) {
 	procSetWindowPos.Call(uintptr(hwnd), 0, 0, 0, uintptr(w), uintptr(h), SWP_NOMOVE|SWP_NOZORDER)
 }
 
-const appVersion = "5.68"
+const appVersion = "5.69"
 
-const latestPatchNotes = `v5.68
+const latestPatchNotes = `v5.69
+
+• 실행 중인 이전 JTSN 때문에 설치 파일 교체가 실패하던 문제 수정
+• 설치 전 기존 실행 파일을 안전하게 종료하고 내부 백업 후 교체
+• 새 파일 설치 실패 시 기존 실행 파일을 자동 복구하도록 보강
+• 설치 실패 안내창에 실제 Windows 오류 원인을 표시
+
+v5.68
 • 자동 업데이트 실패 원인을 더 이상 조용히 숨기지 않고 안내
 • LOCALAPPDATA가 변경된 PC에서도 실행 중인 본체 기준으로 설치 경로 자동 탐색
 • 업데이트 확인 프로세스 실행 실패 시 설정 화면에서 즉시 재시도 안내
@@ -2179,6 +2186,12 @@ v5.62
 • 모니터 DPI 변경 시 창 크기와 UI를 다시 계산`
 
 const allPatchNotes = `잡툴사니 · JTSN 패치노트
+
+v5.69
+• 실행 중인 이전 JTSN 때문에 설치 파일 교체가 실패하던 문제 수정
+• 설치 전 기존 실행 파일을 안전하게 종료하고 내부 백업 후 교체
+• 새 파일 설치 실패 시 기존 실행 파일을 자동 복구하도록 보강
+• 설치 실패 안내창에 실제 Windows 오류 원인을 표시
 
 v5.68
 • 자동 업데이트 실패 원인을 더 이상 조용히 숨기지 않고 안내
