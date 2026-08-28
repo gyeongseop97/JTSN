@@ -1,0 +1,1 @@
+release JTSN v5.77 latest patch notes only
