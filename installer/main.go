@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	launcherVersion = "5.68"
+	launcherVersion = "5.69"
 	releaseAPI      = "https://api.github.com/repos/gyeongseop97/JTSN/releases/latest"
 	appFolderName   = "JTSN"
 	installedName   = "JTSN.exe"
@@ -99,6 +99,8 @@ var (
 	updateStatus   string
 	updateErr      error
 	updateCorePID  int
+	installErrMu   sync.Mutex
+	installErr     error
 	modernButtons  = map[uintptr]bool{}
 )
 
@@ -359,6 +361,18 @@ func installDir() string {
 
 func installedPath() string { return filepath.Join(installDir(), installedName) }
 
+func setInstallError(err error) {
+	installErrMu.Lock()
+	installErr = err
+	installErrMu.Unlock()
+}
+
+func getInstallError() error {
+	installErrMu.Lock()
+	defer installErrMu.Unlock()
+	return installErr
+}
+
 func ensureInstalled() bool {
 	self, err := os.Executable()
 	if err != nil {
@@ -385,6 +399,7 @@ func ensureInstalled() bool {
 func runInstallWizard(self, want string) bool {
 	installerSelf, installerWant = self, want
 	installing, installOK, installDone = false, false, false
+	setInstallError(nil)
 
 	user32 := syscall.NewLazyDLL("user32.dll")
 	kernel32 := syscall.NewLazyDLL("kernel32.dll")
@@ -472,6 +487,7 @@ func runInstallWizard(self, want string) bool {
 					err := copyFileProgress(installerSelf, installerWant, func(percent int) {
 						postMessage.Call(installerHWND, wmAppProgress, uintptr(percent), 0)
 					})
+					setInstallError(err)
 					if err != nil {
 						postMessage.Call(installerHWND, wmAppDone, 0, 0)
 						return
@@ -503,7 +519,11 @@ func runInstallWizard(self, want string) bool {
 				enableWindow.Call(installBtnHWND, 1)
 				enableWindow.Call(cancelBtnHWND, 1)
 				setText.Call(statusHWND, uintptr(unsafe.Pointer(p16("설치하지 못했습니다. 다시 시도해 주세요."))))
-				message("JTSN 설치에 실패했습니다.", 0x10)
+				detail := "알 수 없는 오류"
+				if err := getInstallError(); err != nil {
+					detail = err.Error()
+				}
+				message("JTSN 설치에 실패했습니다.\n\n"+detail+"\n\n실행 중인 JTSN을 종료한 뒤 [설치 시작]을 다시 눌러 주세요.", 0x10)
 			}
 			return 0
 		case wmClose:
@@ -810,8 +830,64 @@ func copyFileProgress(src, dst string, progress func(int)) error {
 		_ = os.Remove(tmp)
 		return err
 	}
-	_ = os.Remove(dst)
-	return os.Rename(tmp, dst)
+	if err := replaceInstalledFile(tmp, dst); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+func stopRunningJTSN(dst string) {
+	// Close the visible core gracefully, then terminate stale background
+	// launchers that can keep the installed JTSN.exe locked on Windows.
+	u := syscall.NewLazyDLL("user32.dll")
+	hwnd, _, _ := u.NewProc("FindWindowW").Call(uintptr(unsafe.Pointer(p16("JTSNUtilityWindow"))), 0)
+	if hwnd != 0 {
+		u.NewProc("PostMessageW").Call(hwnd, wmAppUpdateExit, 0, 0)
+	}
+	quotedPath := strings.ReplaceAll(dst, "'", "''")
+	script := fmt.Sprintf("Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq '%s' -and $_.ProcessId -ne %d } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }", quotedPath, os.Getpid())
+	_ = runHidden("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
+}
+
+func renameWithRetry(oldPath, newPath string) error {
+	var lastErr error
+	for i := 0; i < 30; i++ {
+		if err := os.Rename(oldPath, newPath); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return lastErr
+}
+
+func replaceInstalledFile(tmp, dst string) error {
+	backup := dst + ".install-backup"
+	_ = os.Remove(backup)
+
+	oldExists := false
+	if _, err := os.Stat(dst); err == nil {
+		oldExists = true
+		stopRunningJTSN(dst)
+		if err := renameWithRetry(dst, backup); err != nil {
+			return fmt.Errorf("기존 JTSN 실행 파일을 닫거나 백업하지 못했습니다: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("설치 대상 파일을 확인하지 못했습니다: %w", err)
+	}
+
+	if err := renameWithRetry(tmp, dst); err != nil {
+		if oldExists {
+			_ = renameWithRetry(backup, dst)
+		}
+		return fmt.Errorf("새 JTSN 실행 파일을 설치하지 못했습니다: %w", err)
+	}
+	if oldExists {
+		_ = os.Remove(backup)
+	}
+	return nil
 }
 
 func runHidden(name string, args ...string) error {
