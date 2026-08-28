@@ -2118,9 +2118,16 @@ func resizeLauncher(hwnd syscall.Handle) {
 	procSetWindowPos.Call(uintptr(hwnd), 0, 0, 0, uintptr(w), uintptr(h), SWP_NOMOVE|SWP_NOZORDER)
 }
 
-const appVersion = "5.75"
+const appVersion = "5.76"
 
-const latestPatchNotes = `v5.75
+const latestPatchNotes = `v5.76
+
+• 퀵런처 단축키 입력에서 Space 키 지원
+• Ctrl+Alt+Space 조합을 정상 저장·등록 가능하도록 수정
+• 신규 기본 퀵런처 단축키를 Ctrl+Alt+Space로 변경
+• 기존 사용자가 저장한 단축키 설정은 그대로 유지
+
+v5.75
 
 • 퀵런처의 사각 팝업 배경과 네이티브 사각 그림자 완전 제거
 • 실제 윈도우 영역을 도넛 외곽/내곽 반지름과 정확히 일치하도록 수정
@@ -2225,6 +2232,11 @@ v5.62
 • 모니터 DPI 변경 시 창 크기와 UI를 다시 계산`
 
 const allPatchNotes = `잡툴사니 · JTSN 패치노트
+
+v5.76
+• 퀵런처 단축키 Space 키 지원
+• Ctrl+Alt+Space 조합 저장·등록 지원
+• 신규 기본 단축키 Ctrl+Alt+Space 적용
 
 v5.75
 • 퀵런처 사각 배경과 네이티브 사각 그림자 제거

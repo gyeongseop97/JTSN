@@ -58,7 +58,7 @@ var (
 	procUnregisterHotKeyTray = user32.NewProc("UnregisterHotKey")
 	trayData                 notifyIconDataW
 	trayExitRequested        bool
-	launcherHotkey           = "Ctrl+Shift+J"
+	launcherHotkey           = "Ctrl+Alt+Space"
 	settingsHotkeyEdit       syscall.Handle
 	settingsHotkeyOldProc    uintptr
 	settingsHotkeyBeforeEdit string
@@ -97,6 +97,9 @@ func keyDown(vk int) bool {
 }
 
 func capturedKeyName(vk uint32) string {
+	if vk == 0x20 {
+		return "Space"
+	}
 	if (vk >= 'A' && vk <= 'Z') || (vk >= '0' && vk <= '9') {
 		return string(rune(vk))
 	}
@@ -288,6 +291,9 @@ func parseLauncherHotkey(s string) (mods, primary, secondary uint32, ok bool) {
 	return mods, normal[0], secondary, true
 }
 func hotkeyVK(s string) uint32 {
+	if s == "SPACE" {
+		return 0x20
+	}
 	if len(s) == 1 {
 		c := s[0]
 		if (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
@@ -369,7 +375,7 @@ func applySettingsHotkey(hwnd syscall.Handle) bool {
 	if !registerLauncherHotkey(hwnd) {
 		launcherHotkey = old
 		registerLauncherHotkey(hwnd)
-		errorBox("단축키 형식이 올바르지 않거나 다른 프로그램에서 사용 중입니다.\n\n예: Ctrl+J / Ctrl+Shift+J / Ctrl+J,T")
+		errorBox("단축키 형식이 올바르지 않거나 다른 프로그램에서 사용 중입니다.\n\n예: Ctrl+Alt+Space / Ctrl+Shift+J / Ctrl+J,T")
 		return false
 	}
 	saveLauncherHotkey()
