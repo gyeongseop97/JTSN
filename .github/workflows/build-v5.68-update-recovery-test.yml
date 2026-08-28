@@ -1,0 +1,67 @@
+name: Build JTSN v5.68 Update Recovery Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'fix/v5.68-update-recovery'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+
+      - name: Format and verify source
+        shell: pwsh
+        run: |
+          gofmt -w app/main.go installer/main.go
+          $app = Get-Content app/main.go -Raw
+          $installer = Get-Content installer/main.go -Raw
+          if ($app -notmatch 'const appVersion = "5\.68"') { throw 'app version not updated' }
+          if ($app -notmatch 'func installedLauncherPath') { throw 'launcher path fallback missing' }
+          if ($app -notmatch 'func showUpdateCheckErrorOnce') { throw 'app update error reporting missing' }
+          if ($installer -notmatch 'launcherVersion = "5\.68"') { throw 'launcher version not updated' }
+          if ($installer -notmatch 'func reportBackgroundUpdateError') { throw 'background update error reporting missing' }
+
+      - name: Build application
+        shell: pwsh
+        working-directory: app
+        run: |
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_v5.68.exe .
+          $coreHash=(Get-FileHash JTSN_v5.68.exe -Algorithm SHA256).Hash.ToLower()
+          "CORE_SHA256=$coreHash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          Get-ChildItem installer/core -Filter '*.exe' -ErrorAction SilentlyContinue | Remove-Item -Force
+          Copy-Item app/JTSN_v5.68.exe installer/core/JTSN_v5.68.exe -Force
+          $source = Get-Content installer/main.go -Raw
+          $source = [regex]::Replace($source, 'expectedCoreSHA = "[0-9a-f]*"', "expectedCoreSHA = `"$env:CORE_SHA256`"", 1)
+          Set-Content installer/main.go -Value $source -Encoding utf8
+          gofmt -w installer/main.go
+          Push-Location installer
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_Setup_v5.68.exe .
+          Pop-Location
+          if ((Get-Item installer/JTSN_Setup_v5.68.exe).Length -lt 1000000) { throw 'installer binary unexpectedly small' }
+          (Get-FileHash installer/JTSN_Setup_v5.68.exe -Algorithm SHA256).Hash.ToLower() | Set-Content installer/JTSN_Setup_v5.68.exe.sha256 -Encoding ascii
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JTSN-v5.68-update-recovery-test
+          path: |
+            installer/JTSN_Setup_v5.68.exe
+            installer/JTSN_Setup_v5.68.exe.sha256
+          if-no-files-found: error
