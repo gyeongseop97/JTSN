@@ -1,0 +1,118 @@
+name: Publish JTSN v5.72 Auto Update Test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.release/release-v5.72.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+
+      - name: Patch v5.72 source
+        shell: pwsh
+        run: |
+          function Replace-One([string]$text, [string]$pattern, [string]$replacement, [string]$label) {
+            $count = [regex]::Matches($text, $pattern).Count
+            if ($count -ne 1) { throw "$label expected exactly one match, got $count" }
+            return [regex]::Replace($text, $pattern, $replacement, 1)
+          }
+
+          $appPath = 'app/main.go'
+          $app = Get-Content $appPath -Raw
+          $app = Replace-One $app 'const appVersion = "5\.71"' 'const appVersion = "5.72"' 'app version'
+
+          $latestHeader = "const latestPatchNotes = ``v5.72`r`n`r`n• 자동 업데이트 동작 확인을 위한 테스트 패치`r`n• v5.71에서 새 버전 감지 팝업과 수동 업데이트 확인 동작 검증`r`n• 기능 변경 없이 버전 및 패치노트만 갱신`r`n`r`nv5.71"
+          $app = Replace-One $app 'const latestPatchNotes = `v5\.71' $latestHeader 'latest patch notes'
+
+          $allHeader = "const allPatchNotes = ``잡툴사니 · JTSN 패치노트`r`n`r`nv5.72`r`n• 자동 업데이트 동작 확인을 위한 테스트 패치`r`n• v5.71에서 새 버전 감지 팝업과 수동 업데이트 확인 동작 검증`r`n• 기능 변경 없이 버전 및 패치노트만 갱신`r`n`r`nv5.71"
+          $app = Replace-One $app 'const allPatchNotes = `잡툴사니 · JTSN 패치노트\r?\n\r?\nv5\.71' $allHeader 'all patch notes'
+          Set-Content $appPath -Value $app -Encoding utf8
+
+          $installerPath = 'installer/main.go'
+          $installer = Get-Content $installerPath -Raw
+          $installer = Replace-One $installer 'launcherVersion = "5\.71"' 'launcherVersion = "5.72"' 'launcher version'
+          Set-Content $installerPath -Value $installer -Encoding utf8
+
+          gofmt -w app/main.go installer/main.go
+
+          $check = Get-Content app/main.go -Raw
+          if ($check -notmatch 'const appVersion = "5\.72"') { throw 'app version patch failed' }
+          $setupCheck = Get-Content installer/main.go -Raw
+          if ($setupCheck -notmatch 'launcherVersion = "5\.72"') { throw 'launcher version patch failed' }
+
+      - name: Build application
+        shell: pwsh
+        working-directory: app
+        run: |
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_v5.72.exe .
+
+      - name: Prepare and build installer
+        shell: pwsh
+        run: |
+          $hash=(Get-FileHash app/JTSN_v5.72.exe -Algorithm SHA256).Hash.ToLower()
+          Get-ChildItem installer/core -Filter '*.exe' -ErrorAction SilentlyContinue | Remove-Item -Force
+          Copy-Item app/JTSN_v5.72.exe installer/core/JTSN_v5.72.exe -Force
+          $source = Get-Content installer/main.go -Raw
+          $source = [regex]::Replace($source, 'expectedCoreSHA = "[0-9a-f]*"', "expectedCoreSHA = `"$hash`"", 1)
+          Set-Content installer/main.go -Value $source -Encoding utf8
+          gofmt -w installer/main.go
+          Push-Location installer
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_Setup_v5.72.exe .
+          Pop-Location
+          if ((Get-Item installer/JTSN_Setup_v5.72.exe).Length -lt 1000000) { throw 'installer binary unexpectedly small' }
+
+      - name: Persist v5.72 source to main
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/main.go installer/main.go
+          if (-not (git diff --cached --quiet)) {
+            git commit -m 'Publish v5.72 automatic update test'
+            git push origin HEAD:main
+          }
+
+      - name: Package release
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release-source/JTSN_v5.72_FULL_SOURCE | Out-Null
+          Copy-Item app,installer,.github,scripts release-source/JTSN_v5.72_FULL_SOURCE -Recurse
+          Copy-Item README.md,RELEASE_POLICY.md release-source/JTSN_v5.72_FULL_SOURCE
+          Get-ChildItem release-source/JTSN_v5.72_FULL_SOURCE -Filter '*.exe' -Recurse | Remove-Item -Force
+          Compress-Archive -Path release-source/JTSN_v5.72_FULL_SOURCE -DestinationPath JTSN_v5.72_FULL_SOURCE.zip
+
+          $installerHash=(Get-FileHash installer/JTSN_Setup_v5.72.exe -Algorithm SHA256).Hash.ToLower()
+          $sourceHash=(Get-FileHash JTSN_v5.72_FULL_SOURCE.zip -Algorithm SHA256).Hash.ToLower()
+          "$installerHash  JTSN_Setup_v5.72.exe" | Set-Content -Encoding ascii JTSN_Setup_v5.72.exe.sha256.txt
+          @("$installerHash  JTSN_Setup_v5.72.exe", "$sourceHash  JTSN_v5.72_FULL_SOURCE.zip") | Set-Content -Encoding ascii JTSN_v5.72_SHA256SUMS.txt
+          @(
+            '## v5.72 자동 업데이트 테스트', '',
+            '- v5.71에서 자동 업데이트 새 버전 알림이 정상 표시되는지 확인하기 위한 테스트 릴리스',
+            '- 설정 > 업데이트 확인 버튼의 수동 버전 확인 동작 검증',
+            '- 다운로드, SHA-256 검증, 교체, 재실행 전 과정 확인',
+            '- 기능 변경 없이 버전 및 패치노트만 갱신'
+          ) | Set-Content -Encoding utf8 RELEASE_NOTES.md
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v5.72 installer/JTSN_Setup_v5.72.exe JTSN_Setup_v5.72.exe.sha256.txt JTSN_v5.72_FULL_SOURCE.zip JTSN_v5.72_SHA256SUMS.txt --target main --title "JTSN v5.72 Auto Update Test" --notes-file RELEASE_NOTES.md --latest
