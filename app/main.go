@@ -2118,9 +2118,17 @@ func resizeLauncher(hwnd syscall.Handle) {
 	procSetWindowPos.Call(uintptr(hwnd), 0, 0, 0, uintptr(w), uintptr(h), SWP_NOMOVE|SWP_NOZORDER)
 }
 
-const appVersion = "5.73"
+const appVersion = "5.74"
 
-const latestPatchNotes = `v5.73
+const latestPatchNotes = `v5.74
+
+• 검색형 퀵런처를 마우스 중심 도넛형 방사 메뉴로 변경
+• 도넛을 피자 조각처럼 분할해 각 조각 클릭 시 기능 즉시 실행
+• 퀵런처 전용 즐겨찾기 설정 추가 · 최대 8개 선택 가능
+• 선택 순서대로 12시 방향부터 시계방향 배치
+• 기존 메인 즐겨찾기와 퀵런처 즐겨찾기를 완전히 분리
+
+v5.73
 
 • 전역 호출 단축키로 즉시 여는 퀵런처 추가
 • 도구명·한글/영문 별칭 검색 후 Enter로 바로 실행
@@ -2209,6 +2217,13 @@ v5.62
 • 모니터 DPI 변경 시 창 크기와 UI를 다시 계산`
 
 const allPatchNotes = `잡툴사니 · JTSN 패치노트
+
+v5.74
+• 검색형 퀵런처를 마우스 중심 도넛형 방사 메뉴로 변경
+• 도넛 조각 클릭으로 기능 즉시 실행
+• 퀵런처 전용 즐겨찾기 설정 추가 · 최대 8개 선택 가능
+• 선택 순서대로 12시 방향부터 시계방향 배치
+• 기존 메인 즐겨찾기와 퀵런처 즐겨찾기 분리
 
 v5.73
 • 전역 호출 단축키로 즉시 여는 퀵런처 추가
@@ -2610,7 +2625,7 @@ func openSettingsWindow() {
 	}
 	var owner RECT
 	procGetWindowRect.Call(uintptr(mainHWND), uintptr(unsafe.Pointer(&owner)))
-	w, h := int32(560), int32(540)
+	w, h := int32(560), int32(610)
 	x := owner.Left + (owner.Right-owner.Left-w)/2
 	y := owner.Top + (owner.Bottom-owner.Top-h)/2
 	settingsHWND = createWindow(0, "JTSNSettingsWindow", "JTSN 설정", WS_POPUP|WS_VISIBLE|WS_CLIPCHILDREN, int(x), int(y), int(w), int(h), mainHWND, 0)
@@ -2645,9 +2660,10 @@ func settingsWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) ui
 			createOwnerButton(hwnd, "미니형", 280, 126, 124, 120, ID_SETTINGS_MINI, BTN_SETTING_OPTION),
 			createOwnerButton(hwnd, "컴팩트형", 412, 126, 124, 120, ID_SETTINGS_COMPACT, BTN_SETTING_OPTION),
 			settingsHotkeyEdit,
-			createOwnerButton(hwnd, "고급 클립보드 설정", 154, 390, 238, 52, ID_SETTINGS_CLIP, BTN_SECONDARY),
-			createOwnerButton(hwnd, "업데이트 확인", 402, 390, 126, 52, ID_SETTINGS_UPDATE, BTN_SECONDARY),
-			createOwnerButton(hwnd, "완료", 414, 474, 110, 40, ID_SETTINGS_APPLY, BTN_PRIMARY),
+			createOwnerButton(hwnd, "퀵런처 즐겨찾기 설정", 154, 390, 374, 48, ID_SETTINGS_QUICK_FAVORITES, BTN_SECONDARY),
+			createOwnerButton(hwnd, "고급 클립보드 설정", 154, 450, 238, 48, ID_SETTINGS_CLIP, BTN_SECONDARY),
+			createOwnerButton(hwnd, "업데이트 확인", 402, 450, 126, 48, ID_SETTINGS_UPDATE, BTN_SECONDARY),
+			createOwnerButton(hwnd, "완료", 414, 542, 110, 40, ID_SETTINGS_APPLY, BTN_PRIMARY),
 		)
 		return 0
 	case WM_NCHITTEST:
@@ -2701,6 +2717,8 @@ func settingsWndProc(hwnd syscall.Handle, msg uint32, wParam, lParam uintptr) ui
 			resizeLauncher(mainHWND)
 			rebuildLauncher(mainHWND)
 			procInvalidateRect.Call(uintptr(hwnd), 0, 1)
+		case ID_SETTINGS_QUICK_FAVORITES:
+			openQuickFavoritesSettings()
 		case ID_SETTINGS_CLIP:
 			launchTool(ID_NAV_CLIP)
 		case ID_SETTINGS_UPDATE:
@@ -2756,7 +2774,7 @@ func paintSettingsWindow(hwnd syscall.Handle) {
 	drawSettingsText(syscall.Handle(hdc), "사용할 메인 화면 형태를 선택하세요.", RECT{166, 102, 500, 126}, fontSmall, rgb(100, 116, 139))
 	drawSettingsText(syscall.Handle(hdc), "선택한 화면은 다음 실행에도 유지됩니다.", RECT{166, 262, 510, 286}, fontSmall, rgb(100, 116, 139))
 	drawSettingsText(syscall.Handle(hdc), "퀵런처 호출 단축키", RECT{166, 292, 420, 322}, fontLauncherSection, rgb(17, 24, 39))
-	drawSettingsText(syscall.Handle(hdc), "입력란을 누른 뒤 원하는 키 조합을 누르세요. (최대 3키)", RECT{166, 362, 530, 386}, fontSmall, rgb(100, 116, 139))
+	drawSettingsText(syscall.Handle(hdc), "단축키는 마우스 주변 도넛 퀵런처를 호출합니다. 표시할 기능은 아래에서 선택하세요.", RECT{166, 362, 530, 386}, fontSmall, rgb(100, 116, 139))
 }
 
 func drawSettingsText(hdc syscall.Handle, text string, rc RECT, font syscall.Handle, color uintptr) {

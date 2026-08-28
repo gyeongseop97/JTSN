@@ -12,26 +12,26 @@ import (
 )
 
 const (
-	quickClassName             = "JTSNRadialQuickLauncherWindow"
-	quickFavoritesClassName    = "JTSNQuickFavoritesSettingsWindow"
-	quickWMActivate            = 0x0006
-	quickWAInactive            = 0
-	quickWMMouseMove           = 0x0200
-	quickWMLButtonUp           = 0x0202
-	quickWMMouseLeave          = 0x02A3
-	quickVKReturn              = 0x0D
-	quickWSExTopmost           = 0x00000008
-	quickWSExToolWindow        = 0x00000080
-	quickOuterDiameter         = 430
-	quickOuterRadius           = 205
-	quickInnerRadius           = 74
-	quickMaxFavorites          = 8
-	quickFavoriteButtonBase    = 8100
-	quickFavoriteSaveID        = 8180
-	quickFavoriteResetID       = 8181
-	quickFavoriteCloseID       = 8182
+	quickClassName              = "JTSNRadialQuickLauncherWindow"
+	quickFavoritesClassName     = "JTSNQuickFavoritesSettingsWindow"
+	quickWMActivate             = 0x0006
+	quickWAInactive             = 0
+	quickWMMouseMove            = 0x0200
+	quickWMLButtonUp            = 0x0202
+	quickWMMouseLeave           = 0x02A3
+	quickVKReturn               = 0x0D
+	quickWSExTopmost            = 0x00000008
+	quickWSExToolWindow         = 0x00000080
+	quickOuterDiameter          = 430
+	quickOuterRadius            = 205
+	quickInnerRadius            = 74
+	quickMaxFavorites           = 8
+	quickFavoriteButtonBase     = 8100
+	quickFavoriteSaveID         = 8180
+	quickFavoriteResetID        = 8181
+	quickFavoriteCloseID        = 8182
 	ID_SETTINGS_QUICK_FAVORITES = 7650
-	quickRGNDiff               = 4
+	quickRGNDiff                = 4
 )
 
 var (
@@ -45,12 +45,12 @@ var (
 	quickFavoriteControls         []syscall.Handle
 	quickFavoriteButtons          = map[int]syscall.Handle{}
 
-	quickGDI32                   = syscall.NewLazyDLL("gdi32.dll")
-	quickUser32                  = syscall.NewLazyDLL("user32.dll")
-	procQuickPolygon             = quickGDI32.NewProc("Polygon")
-	procQuickCreateEllipticRgn   = quickGDI32.NewProc("CreateEllipticRgn")
-	procQuickCombineRgn          = quickGDI32.NewProc("CombineRgn")
-	procQuickGetSystemMetrics    = quickUser32.NewProc("GetSystemMetrics")
+	quickGDI32                 = syscall.NewLazyDLL("gdi32.dll")
+	quickUser32                = syscall.NewLazyDLL("user32.dll")
+	procQuickPolygon           = quickGDI32.NewProc("Polygon")
+	procQuickCreateEllipticRgn = quickGDI32.NewProc("CreateEllipticRgn")
+	procQuickCombineRgn        = quickGDI32.NewProc("CombineRgn")
+	procQuickGetSystemMetrics  = quickUser32.NewProc("GetSystemMetrics")
 )
 
 func ensureQuickLauncherClass() bool {
