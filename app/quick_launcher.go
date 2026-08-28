@@ -9,17 +9,17 @@ import (
 )
 
 const (
-	quickClassName       = "JTSNQuickLauncherWindow"
-	quickSearchID        = 7601
-	quickWMActivate      = 0x0006
-	quickWAInactive      = 0
-	quickVKReturn        = 0x0D
-	quickVKUp            = 0x26
-	quickVKDown          = 0x28
-	quickEMSetCueBanner  = 0x1501
-	quickWSExTopmost     = 0x00000008
-	quickWSExToolWindow  = 0x00000080
-	quickMaxResults      = 6
+	quickClassName      = "JTSNQuickLauncherWindow"
+	quickSearchID       = 7601
+	quickWMActivate     = 0x0006
+	quickWAInactive     = 0
+	quickVKReturn       = 0x0D
+	quickVKUp           = 0x26
+	quickVKDown         = 0x28
+	quickEMSetCueBanner = 0x1501
+	quickWSExTopmost    = 0x00000008
+	quickWSExToolWindow = 0x00000080
+	quickMaxResults     = 6
 )
 
 var (
@@ -50,8 +50,6 @@ func ensureQuickLauncherClass() bool {
 	}
 	r, _, _ := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
 	if r == 0 {
-		// ERROR_CLASS_ALREADY_EXISTS is harmless when a previous quick window
-		// registered the class in the same process.
 		quickClassRegistered = true
 		return true
 	}
@@ -110,8 +108,8 @@ func closeQuickLauncher() {
 	}
 }
 
-func quickLabel(parent syscall.Handle, text string, x, y, w, h int, font syscall.Handle) syscall.Handle {
-	h := createWindow(WS_EX_TRANSPARENT, "STATIC", text, WS_CHILD|WS_VISIBLE, x, y, w, h, parent, 0)
+func quickLabel(parent syscall.Handle, text string, x, y, w, height int, font syscall.Handle) syscall.Handle {
+	h := createWindow(WS_EX_TRANSPARENT, "STATIC", text, WS_CHILD|WS_VISIBLE, x, y, w, height, parent, 0)
 	sendFont(h, font)
 	quickControls = append(quickControls, h)
 	return h
