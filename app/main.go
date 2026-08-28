@@ -2118,9 +2118,15 @@ func resizeLauncher(hwnd syscall.Handle) {
 	procSetWindowPos.Call(uintptr(hwnd), 0, 0, 0, uintptr(w), uintptr(h), SWP_NOMOVE|SWP_NOZORDER)
 }
 
-const appVersion = "5.71"
+const appVersion = "5.72"
 
-const latestPatchNotes = `v5.71
+const latestPatchNotes = `v5.72
+
+• 자동 업데이트 동작 확인을 위한 테스트 패치
+• v5.71에서 새 버전 감지 팝업과 수동 업데이트 확인 동작 검증
+• 기능 변경 없이 버전 및 패치노트만 갱신
+
+v5.71
 
 • 설정의 '업데이트 확인' 결과창이 보이지 않던 문제 수정
 • 자동 업데이트 알림 프로세스를 숨김 실행하지 않도록 변경
@@ -2196,6 +2202,11 @@ v5.62
 • 모니터 DPI 변경 시 창 크기와 UI를 다시 계산`
 
 const allPatchNotes = `잡툴사니 · JTSN 패치노트
+
+v5.72
+• 자동 업데이트 동작 확인을 위한 테스트 패치
+• v5.71에서 새 버전 감지 팝업과 수동 업데이트 확인 동작 검증
+• 기능 변경 없이 버전 및 패치노트만 갱신
 
 v5.71
 • 설정의 '업데이트 확인' 결과창이 보이지 않던 문제 수정
