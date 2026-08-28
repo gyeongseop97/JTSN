@@ -43,12 +43,7 @@ jobs:
           $app = Replace-One $app 'w, h := int32\(560\), int32\(540\)' 'w, h := int32(560), int32(610)' 'settings window height'
 
           $oldButtons = '(?s)createOwnerButton\(hwnd, "고급 클립보드 설정", 154, 390, 238, 52, ID_SETTINGS_CLIP, BTN_SECONDARY\),\s*createOwnerButton\(hwnd, "업데이트 확인", 402, 390, 126, 52, ID_SETTINGS_UPDATE, BTN_SECONDARY\),\s*createOwnerButton\(hwnd, "완료", 414, 474, 110, 40, ID_SETTINGS_APPLY, BTN_PRIMARY\),'
-          $newButtons = @'
-createOwnerButton(hwnd, "퀵런처 즐겨찾기 설정", 154, 390, 374, 48, ID_SETTINGS_QUICK_FAVORITES, BTN_SECONDARY),
-			createOwnerButton(hwnd, "고급 클립보드 설정", 154, 450, 238, 48, ID_SETTINGS_CLIP, BTN_SECONDARY),
-			createOwnerButton(hwnd, "업데이트 확인", 402, 450, 126, 48, ID_SETTINGS_UPDATE, BTN_SECONDARY),
-			createOwnerButton(hwnd, "완료", 414, 542, 110, 40, ID_SETTINGS_APPLY, BTN_PRIMARY),
-'@
+          $newButtons = "createOwnerButton(hwnd, `"퀵런처 즐겨찾기 설정`", 154, 390, 374, 48, ID_SETTINGS_QUICK_FAVORITES, BTN_SECONDARY),`r`n`t`t`tcreateOwnerButton(hwnd, `"고급 클립보드 설정`", 154, 450, 238, 48, ID_SETTINGS_CLIP, BTN_SECONDARY),`r`n`t`t`tcreateOwnerButton(hwnd, `"업데이트 확인`", 402, 450, 126, 48, ID_SETTINGS_UPDATE, BTN_SECONDARY),`r`n`t`t`tcreateOwnerButton(hwnd, `"완료`", 414, 542, 110, 40, ID_SETTINGS_APPLY, BTN_PRIMARY),"
           $app = Replace-One $app $oldButtons $newButtons 'settings buttons'
 
           $app = Replace-One $app 'case ID_SETTINGS_CLIP:\r?\n\t\t\tlaunchTool\(ID_NAV_CLIP\)' "case ID_SETTINGS_QUICK_FAVORITES:`r`n`t`t`topenQuickFavoritesSettings()`r`n`t`tcase ID_SETTINGS_CLIP:`r`n`t`t`tlaunchTool(ID_NAV_CLIP)" 'quick favorites settings command'
