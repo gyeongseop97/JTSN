@@ -724,16 +724,48 @@ var colorMailbox string
 var errorMailbox string
 var updateCheckMu sync.Mutex
 var updateCheckRunning bool
+var updateCheckErrorShown bool
 
-func checkForUpdateManually() {
-	base := os.Getenv("LOCALAPPDATA")
-	if base == "" {
-		errorBox("설치 경로를 확인하지 못해 업데이트를 조회할 수 없습니다.")
+func installedLauncherPath() (string, error) {
+	candidates := make([]string, 0, 3)
+	if base := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); base != "" {
+		candidates = append(candidates, filepath.Join(base, "Programs", "JTSN", "JTSN.exe"))
+	}
+	if self, err := os.Executable(); err == nil {
+		// Installed cores live in <install>\core. Deriving the launcher from the
+		// running executable keeps updates working when LOCALAPPDATA is redirected.
+		candidates = append(candidates, filepath.Join(filepath.Dir(filepath.Dir(self)), "JTSN.exe"))
+	}
+	seen := make(map[string]bool)
+	for _, candidate := range candidates {
+		candidate = filepath.Clean(candidate)
+		key := strings.ToLower(candidate)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("설치된 JTSN 실행 파일을 찾지 못했습니다")
+}
+
+func showUpdateCheckErrorOnce(detail string) {
+	updateCheckMu.Lock()
+	if updateCheckErrorShown {
+		updateCheckMu.Unlock()
 		return
 	}
-	launcher := filepath.Join(base, "Programs", "JTSN", "JTSN.exe")
-	if st, err := os.Stat(launcher); err != nil || st.IsDir() {
-		errorBox("설치된 JTSN 업데이트 프로그램을 찾지 못했습니다.\n\nJTSN 설치파일로 다시 설치한 뒤 이용해 주세요.")
+	updateCheckErrorShown = true
+	updateCheckMu.Unlock()
+	errorBox("자동 업데이트 확인을 시작하지 못했습니다.\n\n" + detail + "\n\n설정의 '업데이트 확인' 버튼으로 다시 시도할 수 있습니다.")
+}
+
+func checkForUpdateManually() {
+	launcher, err := installedLauncherPath()
+	if err != nil {
+		errorBox(err.Error() + "\n\nJTSN 설치파일로 다시 설치한 뒤 이용해 주세요.")
 		return
 	}
 	cmd := exec.Command(launcher, "--manual-update-check", strconv.Itoa(os.Getpid()))
@@ -758,17 +790,16 @@ func checkForUpdateInBackground() {
 			updateCheckRunning = false
 			updateCheckMu.Unlock()
 		}()
-		base := os.Getenv("LOCALAPPDATA")
-		if base == "" {
-			return
-		}
-		launcher := filepath.Join(base, "Programs", "JTSN", "JTSN.exe")
-		if st, err := os.Stat(launcher); err != nil || st.IsDir() {
+		launcher, err := installedLauncherPath()
+		if err != nil {
+			showUpdateCheckErrorOnce(err.Error())
 			return
 		}
 		cmd := exec.Command(launcher, "--background-update-check", strconv.Itoa(os.Getpid()))
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-		_ = cmd.Run()
+		if err := cmd.Start(); err != nil {
+			showUpdateCheckErrorOnce(err.Error())
+		}
 	}()
 }
 
@@ -2089,9 +2120,15 @@ func resizeLauncher(hwnd syscall.Handle) {
 	procSetWindowPos.Call(uintptr(hwnd), 0, 0, 0, uintptr(w), uintptr(h), SWP_NOMOVE|SWP_NOZORDER)
 }
 
-const appVersion = "5.67"
+const appVersion = "5.68"
 
-const latestPatchNotes = `v5.67
+const latestPatchNotes = `v5.68
+• 자동 업데이트 실패 원인을 더 이상 조용히 숨기지 않고 안내
+• LOCALAPPDATA가 변경된 PC에서도 실행 중인 본체 기준으로 설치 경로 자동 탐색
+• 업데이트 확인 프로세스 실행 실패 시 설정 화면에서 즉시 재시도 안내
+• 자동 검사 프로세스가 장시간 대기 상태로 남는 문제 개선
+
+v5.67
 
 • 설정 화면에 '업데이트 확인' 버튼 추가
 • 현재 버전과 GitHub 최신 릴리스를 사용자가 직접 비교할 수 있도록 개선
@@ -2142,6 +2179,12 @@ v5.62
 • 모니터 DPI 변경 시 창 크기와 UI를 다시 계산`
 
 const allPatchNotes = `잡툴사니 · JTSN 패치노트
+
+v5.68
+• 자동 업데이트 실패 원인을 더 이상 조용히 숨기지 않고 안내
+• LOCALAPPDATA가 변경된 PC에서도 실행 중인 본체 기준으로 설치 경로 자동 탐색
+• 업데이트 확인 프로세스 실행 실패 시 설정 화면에서 즉시 재시도 안내
+• 자동 검사 프로세스가 장시간 대기 상태로 남는 문제 개선
 
 v5.67
 • 설정 화면에 '업데이트 확인' 버튼 추가
