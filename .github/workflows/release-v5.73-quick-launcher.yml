@@ -1,0 +1,127 @@
+name: Publish JTSN v5.73 Quick Launcher
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.release/release-v5.73.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+
+      - name: Patch v5.73 source
+        shell: pwsh
+        run: |
+          function Replace-One([string]$text, [string]$pattern, [string]$replacement, [string]$label) {
+            $count = [regex]::Matches($text, $pattern).Count
+            if ($count -ne 1) { throw "$label expected exactly one match, got $count" }
+            return [regex]::Replace($text, $pattern, $replacement, 1)
+          }
+
+          $appPath = 'app/main.go'
+          $app = Get-Content $appPath -Raw
+          $app = Replace-One $app 'const appVersion = "5\.72"' 'const appVersion = "5.73"' 'app version'
+
+          $latestHeader = "const latestPatchNotes = ``v5.73`r`n`r`n• 전역 호출 단축키로 즉시 여는 퀵런처 추가`r`n• 도구명·한글/영문 별칭 검색 후 Enter로 바로 실행`r`n• 최근 사용·즐겨찾기 기반 기본 추천과 ↑↓ 키보드 이동 지원`r`n• Esc 또는 포커스 이탈 시 즉시 닫히는 경량 팝업 방식 적용`r`n`r`nv5.72"
+          $app = Replace-One $app 'const latestPatchNotes = `v5\.72' $latestHeader 'latest patch notes'
+
+          $allHeader = "const allPatchNotes = ``잡툴사니 · JTSN 패치노트`r`n`r`nv5.73`r`n• 전역 호출 단축키로 즉시 여는 퀵런처 추가`r`n• 도구명·한글/영문 별칭 검색 후 Enter로 바로 실행`r`n• 최근 사용·즐겨찾기 기반 기본 추천과 ↑↓ 키보드 이동 지원`r`n• Esc 또는 포커스 이탈 시 즉시 닫히는 경량 팝업 방식 적용`r`n`r`nv5.72"
+          $app = Replace-One $app 'const allPatchNotes = `잡툴사니 · JTSN 패치노트\r?\n\r?\nv5\.72' $allHeader 'all patch notes'
+
+          $app = Replace-One $app 'drawSettingsText\(syscall\.Handle\(hdc\), "호출 단축키",' 'drawSettingsText(syscall.Handle(hdc), "퀵런처 호출 단축키",' 'settings hotkey label'
+          Set-Content $appPath -Value $app -Encoding utf8
+
+          $trayPath = 'app/tray.go'
+          $tray = Get-Content $trayPath -Raw
+          $tray = Replace-One $tray '(if hotkeySecondaryVK == 0 \{\r?\n\t\t\t)showLauncherFromTray\(\)' '$1showQuickLauncher()' 'primary quick launcher call'
+          $tray = Replace-One $tray '(finishHotkeySequence\(hwnd\)\r?\n\t\t)showLauncherFromTray\(\)' '$1showQuickLauncher()' 'secondary quick launcher call'
+          Set-Content $trayPath -Value $tray -Encoding utf8
+
+          $installerPath = 'installer/main.go'
+          $installer = Get-Content $installerPath -Raw
+          $installer = Replace-One $installer 'launcherVersion = "5\.72"' 'launcherVersion = "5.73"' 'launcher version'
+          Set-Content $installerPath -Value $installer -Encoding utf8
+
+          gofmt -w app/main.go app/tray.go app/quick_launcher.go installer/main.go
+
+          $check = Get-Content app/main.go -Raw
+          if ($check -notmatch 'const appVersion = "5\.73"') { throw 'app version patch failed' }
+          $trayCheck = Get-Content app/tray.go -Raw
+          if (($trayCheck | Select-String -Pattern 'showQuickLauncher\(\)' -AllMatches).Matches.Count -lt 2) { throw 'quick launcher hotkey wiring failed' }
+
+      - name: Build application
+        shell: pwsh
+        working-directory: app
+        run: |
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_v5.73.exe .
+
+      - name: Prepare and build installer
+        shell: pwsh
+        run: |
+          $hash=(Get-FileHash app/JTSN_v5.73.exe -Algorithm SHA256).Hash.ToLower()
+          Get-ChildItem installer/core -Filter '*.exe' -ErrorAction SilentlyContinue | Remove-Item -Force
+          Copy-Item app/JTSN_v5.73.exe installer/core/JTSN_v5.73.exe -Force
+          $source = Get-Content installer/main.go -Raw
+          $source = [regex]::Replace($source, 'expectedCoreSHA = "[0-9a-f]*"', "expectedCoreSHA = `"$hash`"", 1)
+          Set-Content installer/main.go -Value $source -Encoding utf8
+          gofmt -w installer/main.go
+          Push-Location installer
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_Setup_v5.73.exe .
+          Pop-Location
+          if ((Get-Item installer/JTSN_Setup_v5.73.exe).Length -lt 1000000) { throw 'installer binary unexpectedly small' }
+
+      - name: Persist v5.73 source to main
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/main.go app/tray.go app/quick_launcher.go installer/main.go
+          if (-not (git diff --cached --quiet)) {
+            git commit -m 'Add quick launcher in v5.73'
+            git push origin HEAD:main
+          }
+
+      - name: Package release
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release-source/JTSN_v5.73_FULL_SOURCE | Out-Null
+          Copy-Item app,installer,.github,scripts release-source/JTSN_v5.73_FULL_SOURCE -Recurse
+          Copy-Item README.md,RELEASE_POLICY.md release-source/JTSN_v5.73_FULL_SOURCE
+          Get-ChildItem release-source/JTSN_v5.73_FULL_SOURCE -Filter '*.exe' -Recurse | Remove-Item -Force
+          Compress-Archive -Path release-source/JTSN_v5.73_FULL_SOURCE -DestinationPath JTSN_v5.73_FULL_SOURCE.zip
+
+          $installerHash=(Get-FileHash installer/JTSN_Setup_v5.73.exe -Algorithm SHA256).Hash.ToLower()
+          $sourceHash=(Get-FileHash JTSN_v5.73_FULL_SOURCE.zip -Algorithm SHA256).Hash.ToLower()
+          "$installerHash  JTSN_Setup_v5.73.exe" | Set-Content -Encoding ascii JTSN_Setup_v5.73.exe.sha256.txt
+          @("$installerHash  JTSN_Setup_v5.73.exe", "$sourceHash  JTSN_v5.73_FULL_SOURCE.zip") | Set-Content -Encoding ascii JTSN_v5.73_SHA256SUMS.txt
+          @(
+            '## v5.73 퀵런처', '',
+            '- 기존 전역 호출 단축키로 작은 퀵런처를 즉시 표시',
+            '- OCR, PDF, 중복, 스포이드, rename 등 한글/영문 검색 지원',
+            '- 최근 사용 및 즐겨찾기 기반 기본 추천',
+            '- Enter 실행, 위/아래 방향키 이동, Esc 닫기 지원',
+            '- 트레이 더블클릭은 기존처럼 메인 잡툴사니 화면을 엽니다.'
+          ) | Set-Content -Encoding utf8 RELEASE_NOTES.md
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v5.73 installer/JTSN_Setup_v5.73.exe JTSN_Setup_v5.73.exe.sha256.txt JTSN_v5.73_FULL_SOURCE.zip JTSN_v5.73_SHA256SUMS.txt --target main --title "JTSN v5.73 Quick Launcher" --notes-file RELEASE_NOTES.md --latest
