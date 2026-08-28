@@ -42,8 +42,10 @@ jobs:
           $trayPath = 'app/tray.go'
           $tray = Get-Content $trayPath -Raw
           $tray = Replace-One $tray 'launcherHotkey\s+= "Ctrl\+Shift\+J"' 'launcherHotkey           = "Ctrl+Alt+Space"' 'default launcher hotkey'
-          $tray = Replace-One $tray '(func capturedKeyName\(vk uint32\) string \{\r?\n)' '$1`tif vk == 0x20 {`r`n`t`treturn "Space"`r`n`t}`r`n' 'Space capture support'
-          $tray = Replace-One $tray '(func hotkeyVK\(s string\) uint32 \{\r?\n)' '$1`tif s == "SPACE" {`r`n`t`treturn 0x20`r`n`t}`r`n' 'Space VK support'
+          $spaceCapture = "`$1`tif vk == 0x20 {`r`n`t`treturn `"Space`"`r`n`t}`r`n"
+          $tray = Replace-One $tray '(func capturedKeyName\(vk uint32\) string \{\r?\n)' $spaceCapture 'Space capture support'
+          $spaceVK = "`$1`tif s == `"SPACE`" {`r`n`t`treturn 0x20`r`n`t}`r`n"
+          $tray = Replace-One $tray '(func hotkeyVK\(s string\) uint32 \{\r?\n)' $spaceVK 'Space VK support'
           $tray = $tray.Replace('예: Ctrl+J / Ctrl+Shift+J / Ctrl+J,T', '예: Ctrl+Alt+Space / Ctrl+Shift+J / Ctrl+J,T')
           Set-Content $trayPath -Value $tray -Encoding utf8
 
