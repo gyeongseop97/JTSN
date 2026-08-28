@@ -769,7 +769,6 @@ func checkForUpdateManually() {
 		return
 	}
 	cmd := exec.Command(launcher, "--manual-update-check", strconv.Itoa(os.Getpid()))
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	if err := cmd.Start(); err != nil {
 		errorBox("업데이트 확인을 시작하지 못했습니다.\n\n" + err.Error())
 	}
@@ -796,7 +795,6 @@ func checkForUpdateInBackground() {
 			return
 		}
 		cmd := exec.Command(launcher, "--background-update-check", strconv.Itoa(os.Getpid()))
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 		if err := cmd.Start(); err != nil {
 			showUpdateCheckErrorOnce(err.Error())
 		}
@@ -2120,9 +2118,16 @@ func resizeLauncher(hwnd syscall.Handle) {
 	procSetWindowPos.Call(uintptr(hwnd), 0, 0, 0, uintptr(w), uintptr(h), SWP_NOMOVE|SWP_NOZORDER)
 }
 
-const appVersion = "5.70"
+const appVersion = "5.71"
 
-const latestPatchNotes = `v5.70
+const latestPatchNotes = `v5.71
+
+• 설정의 '업데이트 확인' 결과창이 보이지 않던 문제 수정
+• 자동 업데이트 알림 프로세스를 숨김 실행하지 않도록 변경
+• 새 버전 안내·최신 상태·오류 안내 팝업이 정상적으로 표시되도록 보강
+• 릴리스 체크섬 파일 탐색 호환성 개선
+
+v5.70
 
 • v5.69에서 실행 중 자동 업데이트 알림·다운로드·설치·재실행 전 과정 점검
 • 자동 업데이트 정상 동작 확인을 위한 테스트 릴리스
@@ -2191,6 +2196,12 @@ v5.62
 • 모니터 DPI 변경 시 창 크기와 UI를 다시 계산`
 
 const allPatchNotes = `잡툴사니 · JTSN 패치노트
+
+v5.71
+• 설정의 '업데이트 확인' 결과창이 보이지 않던 문제 수정
+• 자동 업데이트 알림 프로세스를 숨김 실행하지 않도록 변경
+• 새 버전 안내·최신 상태·오류 안내 팝업이 정상적으로 표시되도록 보강
+• 릴리스 체크섬 파일 탐색 호환성 개선
 
 v5.70
 • v5.69에서 실행 중 자동 업데이트 알림·다운로드·설치·재실행 전 과정 점검

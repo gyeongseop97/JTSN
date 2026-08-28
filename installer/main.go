@@ -24,11 +24,11 @@ import (
 )
 
 const (
-	launcherVersion = "5.70"
+	launcherVersion = "5.71"
 	releaseAPI      = "https://api.github.com/repos/gyeongseop97/JTSN/releases/latest"
 	appFolderName   = "JTSN"
 	installedName   = "JTSN.exe"
-	expectedCoreSHA = "3b622dc389c22f451d9df2e45c9009aac6cd1b93d113cd05326a43f40ec48d23"
+	expectedCoreSHA = "f75d0d695e147c39966fb7683f9c5922a1fdf496de063563ccc4a6d75f504d14"
 	wmAppUpdateExit = 0x8000 + 60
 )
 
@@ -1030,7 +1030,7 @@ func latest() (release, error) {
 			r.EXE = a.URL
 			r.HASH = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(a.Digest)), "sha256:")
 		}
-		if strings.HasSuffix(name, ".sha256") || strings.HasSuffix(name, ".sha256.txt") {
+		if strings.HasSuffix(name, ".sha256") || strings.HasSuffix(name, ".sha256.txt") || strings.Contains(name, "sha256sums") {
 			r.SUM = a.URL
 		}
 	}
