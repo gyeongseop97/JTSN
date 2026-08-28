@@ -1,0 +1,71 @@
+name: Publish JTSN v5.69 Installer Lock Hotfix
+
+on:
+  workflow_dispatch:
+  push:
+    paths: ['.release/release-v5.69.trigger']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+      - name: Verify and build
+        shell: pwsh
+        run: |
+          gofmt -w app/main.go installer/main.go
+          $app = Get-Content app/main.go -Raw
+          $setup = Get-Content installer/main.go -Raw
+          if ($app -notmatch 'const appVersion = "5\.69"') { throw 'app version mismatch' }
+          if ($setup -notmatch 'launcherVersion = "5\.69"') { throw 'installer version mismatch' }
+          if ($setup -notmatch 'func replaceInstalledFile') { throw 'safe replacement missing' }
+          Push-Location app
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_v5.69.exe .
+          Pop-Location
+          $hash=(Get-FileHash app/JTSN_v5.69.exe -Algorithm SHA256).Hash.ToLower()
+          Get-ChildItem installer/core -Filter '*.exe' -ErrorAction SilentlyContinue | Remove-Item -Force
+          Copy-Item app/JTSN_v5.69.exe installer/core/JTSN_v5.69.exe
+          $source = Get-Content installer/main.go -Raw
+          $source = [regex]::Replace($source, 'expectedCoreSHA = "[0-9a-f]*"', "expectedCoreSHA = `"$hash`"", 1)
+          Set-Content installer/main.go -Value $source -Encoding utf8
+          gofmt -w installer/main.go
+          Push-Location installer
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_Setup_v5.69.exe .
+          Pop-Location
+          if ((Get-Item installer/JTSN_Setup_v5.69.exe).Length -lt 1000000) { throw 'installer binary unexpectedly small' }
+      - name: Package release
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release-source/JTSN_v5.69_FULL_SOURCE | Out-Null
+          Copy-Item app,installer,.github,scripts release-source/JTSN_v5.69_FULL_SOURCE -Recurse
+          Copy-Item README.md,RELEASE_POLICY.md release-source/JTSN_v5.69_FULL_SOURCE
+          Get-ChildItem release-source/JTSN_v5.69_FULL_SOURCE -Filter '*.exe' -Recurse | Remove-Item -Force
+          Compress-Archive -Path release-source/JTSN_v5.69_FULL_SOURCE -DestinationPath JTSN_v5.69_FULL_SOURCE.zip
+          $installerHash=(Get-FileHash installer/JTSN_Setup_v5.69.exe -Algorithm SHA256).Hash.ToLower()
+          $sourceHash=(Get-FileHash JTSN_v5.69_FULL_SOURCE.zip -Algorithm SHA256).Hash.ToLower()
+          @("$installerHash  JTSN_Setup_v5.69.exe", "$sourceHash  JTSN_v5.69_FULL_SOURCE.zip") | Set-Content -Encoding ascii JTSN_v5.69_SHA256SUMS.txt
+          @(
+            '## v5.69', '',
+            '- 실행 중인 이전 JTSN 때문에 설치 파일 교체가 실패하던 문제 수정',
+            '- 설치 전 기존 실행 파일을 안전하게 종료하고 내부 백업 후 교체',
+            '- 새 파일 설치 실패 시 기존 실행 파일 자동 복구',
+            '- 설치 실패 안내창에 실제 Windows 오류 원인 표시', '',
+            'v5.66 또는 v5.68 설치 실패 사용자는 이 설치 파일을 한 번 직접 실행해 주세요.'
+          ) | Set-Content -Encoding utf8 RELEASE_NOTES.md
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create v5.69 installer/JTSN_Setup_v5.69.exe JTSN_v5.69_FULL_SOURCE.zip JTSN_v5.69_SHA256SUMS.txt --target main --title "JTSN v5.69" --notes-file RELEASE_NOTES.md --latest
