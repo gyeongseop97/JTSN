@@ -1,1 +1,1 @@
-release JTSN v5.76 Space hotkey support
+release JTSN v5.76 Space hotkey support retry
