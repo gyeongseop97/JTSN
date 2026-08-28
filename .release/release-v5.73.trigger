@@ -1,1 +1,1 @@
-release JTSN v5.73 quick launcher
+release JTSN v5.73 quick launcher retry 2
