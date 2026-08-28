@@ -1,0 +1,54 @@
+name: Build JTSN v5.69 Installer Lock Hotfix Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['fix/v5.69-installer-lock']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+      - name: Verify and build application
+        shell: pwsh
+        run: |
+          gofmt -w app/main.go installer/main.go
+          $app = Get-Content app/main.go -Raw
+          $setup = Get-Content installer/main.go -Raw
+          if ($app -notmatch 'const appVersion = "5\.69"') { throw 'app version mismatch' }
+          if ($setup -notmatch 'launcherVersion = "5\.69"') { throw 'installer version mismatch' }
+          if ($setup -notmatch 'func replaceInstalledFile') { throw 'safe replacement missing' }
+          if ($setup -notmatch 'install-backup') { throw 'rollback backup missing' }
+          Push-Location app
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_v5.69.exe .
+          Pop-Location
+          $hash=(Get-FileHash app/JTSN_v5.69.exe -Algorithm SHA256).Hash.ToLower()
+          Get-ChildItem installer/core -Filter '*.exe' -ErrorAction SilentlyContinue | Remove-Item -Force
+          Copy-Item app/JTSN_v5.69.exe installer/core/JTSN_v5.69.exe
+          $source = Get-Content installer/main.go -Raw
+          $source = [regex]::Replace($source, 'expectedCoreSHA = "[0-9a-f]*"', "expectedCoreSHA = `"$hash`"", 1)
+          Set-Content installer/main.go -Value $source -Encoding utf8
+          gofmt -w installer/main.go
+          Push-Location installer
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_Setup_v5.69.exe .
+          Pop-Location
+          if ((Get-Item installer/JTSN_Setup_v5.69.exe).Length -lt 1000000) { throw 'installer binary unexpectedly small' }
+          (Get-FileHash installer/JTSN_Setup_v5.69.exe -Algorithm SHA256).Hash.ToLower() | Set-Content installer/JTSN_Setup_v5.69.exe.sha256 -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JTSN-v5.69-installer-lock-test
+          path: |
+            installer/JTSN_Setup_v5.69.exe
+            installer/JTSN_Setup_v5.69.exe.sha256
+          if-no-files-found: error
