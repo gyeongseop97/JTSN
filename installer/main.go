@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	launcherVersion = "5.69"
+	launcherVersion = "5.70"
 	releaseAPI      = "https://api.github.com/repos/gyeongseop97/JTSN/releases/latest"
 	appFolderName   = "JTSN"
 	installedName   = "JTSN.exe"

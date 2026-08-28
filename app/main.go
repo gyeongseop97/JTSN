@@ -2120,9 +2120,14 @@ func resizeLauncher(hwnd syscall.Handle) {
 	procSetWindowPos.Call(uintptr(hwnd), 0, 0, 0, uintptr(w), uintptr(h), SWP_NOMOVE|SWP_NOZORDER)
 }
 
-const appVersion = "5.69"
+const appVersion = "5.70"
 
-const latestPatchNotes = `v5.69
+const latestPatchNotes = `v5.70
+
+• v5.69에서 실행 중 자동 업데이트 알림·다운로드·설치·재실행 전 과정 점검
+• 자동 업데이트 정상 동작 확인을 위한 테스트 릴리스
+
+v5.69
 
 • 실행 중인 이전 JTSN 때문에 설치 파일 교체가 실패하던 문제 수정
 • 설치 전 기존 실행 파일을 안전하게 종료하고 내부 백업 후 교체
@@ -2186,6 +2191,10 @@ v5.62
 • 모니터 DPI 변경 시 창 크기와 UI를 다시 계산`
 
 const allPatchNotes = `잡툴사니 · JTSN 패치노트
+
+v5.70
+• v5.69에서 실행 중 자동 업데이트 알림·다운로드·설치·재실행 전 과정 점검
+• 자동 업데이트 정상 동작 확인을 위한 테스트 릴리스
 
 v5.69
 • 실행 중인 이전 JTSN 때문에 설치 파일 교체가 실패하던 문제 수정
