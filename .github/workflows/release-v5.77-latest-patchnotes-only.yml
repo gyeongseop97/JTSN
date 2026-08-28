@@ -1,0 +1,87 @@
+name: Publish JTSN v5.77 Latest Patch Notes Only
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.release/release-v5.77.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+
+      - name: Patch v5.77 source
+        shell: pwsh
+        run: ./scripts/patch_v577.ps1
+
+      - name: Build application
+        shell: pwsh
+        working-directory: app
+        run: |
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_v5.77.exe .
+
+      - name: Prepare and build installer
+        shell: pwsh
+        run: |
+          $hash=(Get-FileHash app/JTSN_v5.77.exe -Algorithm SHA256).Hash.ToLower()
+          Get-ChildItem installer/core -Filter '*.exe' -ErrorAction SilentlyContinue | Remove-Item -Force
+          Copy-Item app/JTSN_v5.77.exe installer/core/JTSN_v5.77.exe -Force
+          $source = Get-Content installer/main.go -Raw
+          $source = [regex]::Replace($source, 'expectedCoreSHA = "[0-9a-f]*"', "expectedCoreSHA = `"$hash`"", 1)
+          Set-Content installer/main.go -Value $source -Encoding utf8
+          gofmt -w installer/main.go
+          Push-Location installer
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_Setup_v5.77.exe .
+          Pop-Location
+          if ((Get-Item installer/JTSN_Setup_v5.77.exe).Length -lt 1000000) { throw 'installer binary unexpectedly small' }
+
+      - name: Persist v5.77 source to main
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/main.go installer/main.go
+          if (-not (git diff --cached --quiet)) {
+            git commit -m 'Show only latest patch notes in v5.77 popup'
+            git push origin HEAD:main
+          }
+
+      - name: Package release
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release-source/JTSN_v5.77_FULL_SOURCE | Out-Null
+          Copy-Item app,installer,.github,scripts release-source/JTSN_v5.77_FULL_SOURCE -Recurse
+          Copy-Item README.md,RELEASE_POLICY.md release-source/JTSN_v5.77_FULL_SOURCE
+          Get-ChildItem release-source/JTSN_v5.77_FULL_SOURCE -Filter '*.exe' -Recurse | Remove-Item -Force
+          Compress-Archive -Path release-source/JTSN_v5.77_FULL_SOURCE -DestinationPath JTSN_v5.77_FULL_SOURCE.zip
+          $installerHash=(Get-FileHash installer/JTSN_Setup_v5.77.exe -Algorithm SHA256).Hash.ToLower()
+          $sourceHash=(Get-FileHash JTSN_v5.77_FULL_SOURCE.zip -Algorithm SHA256).Hash.ToLower()
+          "$installerHash  JTSN_Setup_v5.77.exe" | Set-Content -Encoding ascii JTSN_Setup_v5.77.exe.sha256.txt
+          @("$installerHash  JTSN_Setup_v5.77.exe", "$sourceHash  JTSN_v5.77_FULL_SOURCE.zip") | Set-Content -Encoding ascii JTSN_v5.77_SHA256SUMS.txt
+          @(
+            '## v5.77 패치노트 표시 개선', '',
+            '- 업데이트 후 자동으로 뜨는 패치노트에는 최신 버전 내용만 표시',
+            '- 과거 패치 이력은 정보 화면의 전체 패치노트에서 계속 확인 가능'
+          ) | Set-Content -Encoding utf8 RELEASE_NOTES.md
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v5.77 installer/JTSN_Setup_v5.77.exe JTSN_Setup_v5.77.exe.sha256.txt JTSN_v5.77_FULL_SOURCE.zip JTSN_v5.77_SHA256SUMS.txt --target main --title "JTSN v5.77 Latest Patch Notes Only" --notes-file RELEASE_NOTES.md --latest
