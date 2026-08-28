@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	launcherVersion = "5.67"
+	launcherVersion = "5.68"
 	releaseAPI      = "https://api.github.com/repos/gyeongseop97/JTSN/releases/latest"
 	appFolderName   = "JTSN"
 	installedName   = "JTSN.exe"
@@ -259,6 +259,32 @@ func snoozeUpdate(tag string) {
 	_ = os.WriteFile(p, []byte(tag+"|"+strconv.FormatInt(time.Now().Add(6*time.Hour).Unix(), 10)), 0644)
 }
 
+func updateCheckFailurePath() string {
+	base, err := os.UserCacheDir()
+	if err != nil {
+		base = os.TempDir()
+	}
+	return filepath.Join(base, "JTSN", "update_check_failure.txt")
+}
+
+func reportBackgroundUpdateError(err error) {
+	if err == nil {
+		return
+	}
+	p := updateCheckFailurePath()
+	if b, readErr := os.ReadFile(p); readErr == nil {
+		parts := strings.SplitN(strings.TrimSpace(string(b)), "|", 2)
+		if len(parts) > 0 {
+			if last, parseErr := strconv.ParseInt(parts[0], 10, 64); parseErr == nil && time.Now().Unix()-last < 24*60*60 {
+				return
+			}
+		}
+	}
+	_ = os.MkdirAll(filepath.Dir(p), 0755)
+	_ = os.WriteFile(p, []byte(strconv.FormatInt(time.Now().Unix(), 10)+"|"+err.Error()), 0644)
+	message("자동 업데이트 확인에 실패했습니다.\n\n인터넷 연결 또는 GitHub 접속 상태를 확인해 주세요.\n설정의 '업데이트 확인' 버튼으로 즉시 다시 시도할 수 있습니다.\n\n"+err.Error(), 0x10)
+}
+
 func manualUpdateCheck(corePID int) {
 	rel, err := latest()
 	if err != nil {
@@ -288,7 +314,11 @@ func manualUpdateCheck(corePID int) {
 
 func backgroundUpdateCheck(corePID int) {
 	rel, err := latest()
-	if err != nil || !newer(rel.Tag, launcherVersion) || updateSnoozed(rel.Tag) {
+	if err != nil {
+		reportBackgroundUpdateError(err)
+		return
+	}
+	if !newer(rel.Tag, launcherVersion) || updateSnoozed(rel.Tag) {
 		return
 	}
 	body := strings.TrimSpace(rel.Body)
