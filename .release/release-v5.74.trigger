@@ -1,1 +1,1 @@
-release JTSN v5.74 radial quick launcher
+release JTSN v5.74 radial quick launcher retry 2
