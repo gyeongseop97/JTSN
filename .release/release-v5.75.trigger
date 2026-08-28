@@ -1,1 +1,1 @@
-release JTSN v5.75 clean radial launcher
+release JTSN v5.75 clean radial launcher retry
