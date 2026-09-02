@@ -24,11 +24,11 @@ import (
 )
 
 const (
-	launcherVersion = "5.78"
+	launcherVersion = "5.79"
 	releaseAPI      = "https://api.github.com/repos/gyeongseop97/JTSN/releases/latest"
 	appFolderName   = "JTSN"
 	installedName   = "JTSN.exe"
-	expectedCoreSHA = "422116b532129dd55b875befb11189d6995b38e2e879a0e06274802dad3cb44c"
+	expectedCoreSHA = "5e8ff2789008346142938565b103982dc9966162defd3779659c97ac15fd5a19"
 	wmAppUpdateExit = 0x8000 + 60
 )
 
@@ -918,14 +918,12 @@ func repairBundleExplorerMenuIfRegistered() {
 	command := fmt.Sprintf("\"%s\" --bundle-shell \"%%1\"", target)
 	keys := []string{`HKCU\Software\Classes\*\shell\JTSNBundle`, `HKCU\Software\Classes\Directory\shell\JTSNBundle`}
 	for _, key := range keys {
-		query := exec.Command("reg.exe", "query", key)
-		query.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-		if err := query.Run(); err != nil {
-			// Respect users who never enabled the Explorer integration.
-			continue
-		}
+		// Recreate the verb instead of editing it in-place. This guarantees that
+		// an old version-specific core command cannot survive an update.
+		_ = runHidden("reg.exe", "delete", key, "/f")
 		_ = runHidden("reg.exe", "add", key, "/v", "MUIVerb", "/d", "JTSN 새 폴더에 넣기", "/f")
 		_ = runHidden("reg.exe", "add", key, "/v", "MultiSelectModel", "/d", "Player", "/f")
+		_ = runHidden("reg.exe", "add", key, "/v", "Icon", "/d", target+",0", "/f")
 		_ = runHidden("reg.exe", "add", key+`\command`, "/ve", "/d", command, "/f")
 	}
 }

@@ -302,7 +302,13 @@ func runBundleShellImmediate(paths []string) {
 	entries := make([]bundleEntry, 0, len(paths))
 	seen := map[string]bool{}
 	for _, path := range paths {
-		path = filepath.Clean(strings.TrimSpace(path))
+		raw := strings.TrimSpace(strings.Trim(path, `"`))
+		// Explorer must provide the full source path. A relative argument would
+		// otherwise be resolved against JTSN's cwd (which can be C:\Windows).
+		if raw == "" || !filepath.IsAbs(raw) {
+			continue
+		}
+		path = filepath.Clean(raw)
 		st, err := os.Stat(path)
 		key := strings.ToLower(path)
 		if err != nil || seen[key] {
@@ -312,7 +318,7 @@ func runBundleShellImmediate(paths []string) {
 		entries = append(entries, bundleEntry{Path: path, IsDir: st.IsDir()})
 	}
 	if len(entries) == 0 {
-		errorBox("이동할 파일이나 폴더를 찾을 수 없습니다.")
+		errorBox("선택한 파일/폴더의 전체 경로를 받지 못했습니다.\n\nJTSN이 우클릭 메뉴를 자동 복구한 뒤 다시 시도해 주세요.")
 		return
 	}
 

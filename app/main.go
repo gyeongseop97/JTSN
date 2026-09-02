@@ -2118,15 +2118,20 @@ func resizeLauncher(hwnd syscall.Handle) {
 	procSetWindowPos.Call(uintptr(hwnd), 0, 0, 0, uintptr(w), uintptr(h), SWP_NOMOVE|SWP_NOZORDER)
 }
 
-const appVersion = "5.78"
+const appVersion = "5.79"
 
-const latestPatchNotes = `v5.78
+const latestPatchNotes = `v5.79
 
-• 파일/폴더 우클릭의 ‘JTSN 새 폴더에 넣기’ 실행 경로를 안정화
-• 버전별 Core EXE 대신 고정 JTSN.exe 런처를 호출하도록 변경
-• 기존 우클릭 메뉴도 업데이트 시 자동으로 현재 설치 경로로 복구`
+• 파일/폴더 우클릭 ‘새 폴더에 넣기’가 C:\Windows에 폴더를 만들려던 문제 수정
+• 업데이트 시 탐색기 우클릭 명령을 현재 JTSN.exe 경로로 강제 재등록
+• 파일 전체 경로를 받지 못하면 이동하지 않도록 안전장치 추가`
 
 const allPatchNotes = `잡툴사니 · JTSN 패치노트
+
+v5.79
+• 파일/폴더 우클릭 ‘새 폴더에 넣기’가 C:\Windows에 새 폴더를 만들려던 문제 수정
+• 업데이트 시 기존 우클릭 명령을 삭제하고 현재 JTSN.exe 경로로 다시 등록
+• 선택 파일의 전체 경로가 아닌 값은 이동 대상에서 제외하도록 안전장치 추가
 
 v5.78
 • 파일/폴더 우클릭 ‘새 폴더에 넣기’ 먹통 문제 수정
