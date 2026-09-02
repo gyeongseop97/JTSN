@@ -257,13 +257,25 @@ func handleBundleCommand(id int) {
 	}
 }
 
+func bundleExplorerCommandTarget() string {
+	if launcher, err := installedLauncherPath(); err == nil && strings.TrimSpace(launcher) != "" {
+		return launcher
+	}
+	// Development/portable fallback. Installed builds should always resolve the
+	// stable launcher above so future core-version changes cannot break Explorer.
+	if exe, err := os.Executable(); err == nil {
+		return exe
+	}
+	return ""
+}
+
 func registerBundleExplorerMenu() {
-	exe, err := os.Executable()
-	if err != nil {
-		errorBox("실행 파일 경로를 확인할 수 없습니다.")
+	target := bundleExplorerCommandTarget()
+	if target == "" {
+		errorBox("JTSN 실행 파일 경로를 확인할 수 없습니다.")
 		return
 	}
-	command := fmt.Sprintf("\"%s\" --bundle-shell \"%%1\"", exe)
+	command := fmt.Sprintf("\"%s\" --bundle-shell \"%%1\"", target)
 	keys := []string{`HKCU\Software\Classes\*\shell\JTSNBundle`, `HKCU\Software\Classes\Directory\shell\JTSNBundle`}
 	for _, key := range keys {
 		commands := [][]string{{"add", key, "/v", "MUIVerb", "/d", "JTSN 새 폴더에 넣기", "/f"}, {"add", key, "/v", "MultiSelectModel", "/d", "Player", "/f"}, {"add", key + `\command`, "/ve", "/d", command, "/f"}}
@@ -276,7 +288,7 @@ func registerBundleExplorerMenu() {
 			}
 		}
 	}
-	info("탐색기 우클릭 메뉴에 ‘JTSN 새 폴더에 넣기’를 등록했습니다.\n\nWindows 11에서는 ‘더 많은 옵션 표시’ 안에 나타날 수 있습니다.")
+	info("탐색기 우클릭 메뉴에 ‘JTSN 새 폴더에 넣기’를 등록했습니다.\n\n이제 버전이 업데이트되어도 고정 JTSN 런처를 통해 계속 동작합니다.\nWindows 11에서는 ‘더 많은 옵션 표시’ 안에 나타날 수 있습니다.")
 }
 
 // runBundleShellImmediate is intentionally independent of the main window.

@@ -24,11 +24,11 @@ import (
 )
 
 const (
-	launcherVersion = "5.77"
+	launcherVersion = "5.78"
 	releaseAPI      = "https://api.github.com/repos/gyeongseop97/JTSN/releases/latest"
 	appFolderName   = "JTSN"
 	installedName   = "JTSN.exe"
-	expectedCoreSHA = "93af9911c02f5dc785094b752cd58292d3b5658781a436df17fbfe299ccadca9"
+	expectedCoreSHA = "422116b532129dd55b875befb11189d6995b38e2e879a0e06274802dad3cb44c"
 	wmAppUpdateExit = 0x8000 + 60
 )
 
@@ -910,7 +910,24 @@ func refreshBranding() {
 	_ = os.WriteFile(iconPath, appIcon, 0644)
 	createDesktopShortcut()
 	registerUninstall(installedPath())
+	repairBundleExplorerMenuIfRegistered()
 	_ = runHidden("ie4uinit.exe", "-show")
+}
+func repairBundleExplorerMenuIfRegistered() {
+	target := installedPath()
+	command := fmt.Sprintf("\"%s\" --bundle-shell \"%%1\"", target)
+	keys := []string{`HKCU\Software\Classes\*\shell\JTSNBundle`, `HKCU\Software\Classes\Directory\shell\JTSNBundle`}
+	for _, key := range keys {
+		query := exec.Command("reg.exe", "query", key)
+		query.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+		if err := query.Run(); err != nil {
+			// Respect users who never enabled the Explorer integration.
+			continue
+		}
+		_ = runHidden("reg.exe", "add", key, "/v", "MUIVerb", "/d", "JTSN 새 폴더에 넣기", "/f")
+		_ = runHidden("reg.exe", "add", key, "/v", "MultiSelectModel", "/d", "Player", "/f")
+		_ = runHidden("reg.exe", "add", key+`\command`, "/ve", "/d", command, "/f")
+	}
 }
 
 func removeDesktopShortcut() {

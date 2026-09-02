@@ -2118,20 +2118,27 @@ func resizeLauncher(hwnd syscall.Handle) {
 	procSetWindowPos.Call(uintptr(hwnd), 0, 0, 0, uintptr(w), uintptr(h), SWP_NOMOVE|SWP_NOZORDER)
 }
 
-const appVersion = "5.77"
+const appVersion = "5.78"
 
-const latestPatchNotes = `v5.77
+const latestPatchNotes = `v5.78
 
-• 업데이트 후 자동으로 표시되는 패치노트에는 최신 버전 내용만 표시
-• 과거 패치 이력은 정보/전체 패치노트 화면에서만 확인하도록 분리`
+• 파일/폴더 우클릭의 ‘JTSN 새 폴더에 넣기’ 실행 경로를 안정화
+• 버전별 Core EXE 대신 고정 JTSN.exe 런처를 호출하도록 변경
+• 기존 우클릭 메뉴도 업데이트 시 자동으로 현재 설치 경로로 복구`
 
 const allPatchNotes = `잡툴사니 · JTSN 패치노트
+
+v5.78
+• 파일/폴더 우클릭 ‘새 폴더에 넣기’ 먹통 문제 수정
+• 우클릭 명령이 고정 JTSN.exe 런처를 사용하도록 변경
+• 기존 등록 메뉴를 업데이트 시 자동 복구하도록 보강
 
 v5.77
 • 업데이트 직후 최신 패치노트 팝업에는 최신 버전 내용만 표시
 • 과거 패치 이력은 정보 화면의 전체 패치노트에서 계속 확인 가능
 
-v5.76• 퀵런처 단축키 Space 키 지원
+v5.76
+• 퀵런처 단축키 Space 키 지원
 • Ctrl+Alt+Space 조합 저장·등록 지원
 • 신규 기본 단축키 Ctrl+Alt+Space 적용
 
