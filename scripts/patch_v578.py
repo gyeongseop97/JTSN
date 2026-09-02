@@ -6,7 +6,8 @@ def replace_one(text: str, pattern: str, replacement: str, label: str, flags=0) 
     matches = list(re.finditer(pattern, text, flags))
     if len(matches) != 1:
         raise RuntimeError(f"{label}: expected exactly one match, got {len(matches)}")
-    return re.sub(pattern, replacement, text, count=1, flags=flags)
+    m = matches[0]
+    return text[:m.start()] + replacement + text[m.end():]
 
 # app/main.go: version + latest-only patch note + all-history prepend
 app_path = Path("app/main.go")
@@ -21,8 +22,8 @@ app = replace_one(
 )
 app = replace_one(
     app,
-    r'(const allPatchNotes = `잡툴사니 · JTSN 패치노트\n\n)',
-    r'''\1v5.78\n• 파일/폴더 우클릭 ‘새 폴더에 넣기’ 먹통 문제 수정\n• 우클릭 명령이 고정 JTSN.exe 런처를 사용하도록 변경\n• 기존 등록 메뉴를 업데이트 시 자동 복구하도록 보강\n\n''',
+    r'const allPatchNotes = `잡툴사니 · JTSN 패치노트\n\n',
+    '''const allPatchNotes = `잡툴사니 · JTSN 패치노트\n\nv5.78\n• 파일/폴더 우클릭 ‘새 폴더에 넣기’ 먹통 문제 수정\n• 우클릭 명령이 고정 JTSN.exe 런처를 사용하도록 변경\n• 기존 등록 메뉴를 업데이트 시 자동 복구하도록 보강\n\n''',
     'all patch notes header',
 )
 app = app.replace('v5.76• 퀵런처', 'v5.76\n• 퀵런처')
@@ -98,10 +99,12 @@ func repairBundleExplorerMenuIfRegistered() {
 '''
 installer = replace_one(
     installer,
-    r'(func refreshBranding\(\) \{.*?registerUninstall\(installedPath\(\)\)\n)(\t_ = runHidden\("ie4uinit\.exe", "-show"\)\n\})',
-    r'\1\trepairBundleExplorerMenuIfRegistered()\n\2' + repair_func,
+    r'registerUninstall\(installedPath\(\)\)\n\t_ = runHidden\("ie4uinit\.exe", "-show"\)\n\}',
+    '''registerUninstall(installedPath())
+	repairBundleExplorerMenuIfRegistered()
+	_ = runHidden("ie4uinit.exe", "-show")
+}''' + repair_func,
     'refresh branding repair hook',
-    flags=re.S,
 )
 installer_path.write_text(installer, encoding="utf-8")
 
