@@ -291,38 +291,68 @@ func registerBundleExplorerMenu() {
 	info("탐색기 우클릭 메뉴에 ‘JTSN 새 폴더에 넣기’를 등록했습니다.\n\n이제 버전이 업데이트되어도 고정 JTSN 런처를 통해 계속 동작합니다.\nWindows 11에서는 ‘더 많은 옵션 표시’ 안에 나타날 수 있습니다.")
 }
 
+func normalizeBundleShellPaths(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	seen := map[string]bool{}
+	for _, path := range paths {
+		raw := strings.TrimSpace(strings.Trim(path, `"`))
+		if raw == "" || !filepath.IsAbs(raw) {
+			continue
+		}
+		clean := filepath.Clean(raw)
+		if _, err := os.Stat(clean); err != nil {
+			continue
+		}
+		key := strings.ToLower(clean)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, clean)
+	}
+	return out
+}
+
 // runBundleShellImmediate is intentionally independent of the main window.
 // Explorer context-menu launches therefore finish without creating another
 // JTSN window or taskbar item.
 func runBundleShellImmediate(paths []string) {
-	paths = collectBundleShellInvocations(paths)
-	if len(paths) == 0 {
+	direct := normalizeBundleShellPaths(paths)
+	if len(direct) == 0 {
+		errorBox("선택한 파일/폴더의 전체 경로를 받지 못했습니다.\n\n탐색기에서 파일을 다시 선택한 뒤 시도해 주세요.")
 		return
 	}
+
+	collected, leader := collectBundleShellInvocations(direct)
+	if !leader {
+		// A leader process is already collecting this Explorer multi-selection.
+		return
+	}
+	paths = normalizeBundleShellPaths(collected)
+	if len(paths) == 0 {
+		// A single-item invocation must never fail merely because the queue could
+		// not be read back. The leader still has the original absolute path.
+		paths = direct
+	}
+
 	entries := make([]bundleEntry, 0, len(paths))
-	seen := map[string]bool{}
 	for _, path := range paths {
-		raw := strings.TrimSpace(strings.Trim(path, `"`))
-		// Explorer must provide the full source path. A relative argument would
-		// otherwise be resolved against JTSN's cwd (which can be C:\Windows).
-		if raw == "" || !filepath.IsAbs(raw) {
-			continue
-		}
-		path = filepath.Clean(raw)
 		st, err := os.Stat(path)
-		key := strings.ToLower(path)
-		if err != nil || seen[key] {
+		if err != nil {
 			continue
 		}
-		seen[key] = true
 		entries = append(entries, bundleEntry{Path: path, IsDir: st.IsDir()})
 	}
 	if len(entries) == 0 {
-		errorBox("선택한 파일/폴더의 전체 경로를 받지 못했습니다.\n\nJTSN이 우클릭 메뉴를 자동 복구한 뒤 다시 시도해 주세요.")
+		errorBox("이동할 파일이나 폴더를 찾을 수 없습니다.")
 		return
 	}
 
 	base := filepath.Dir(entries[0].Path)
+	if base == "" || !filepath.IsAbs(base) {
+		errorBox("새 폴더를 만들 원본 위치를 확인하지 못했습니다.")
+		return
+	}
 	dest := uniqueBundlePath(filepath.Join(base, "새 폴더"))
 	if err := os.MkdirAll(dest, 0755); err != nil {
 		errorBox("새 폴더를 만들지 못했습니다.\n\n" + err.Error())
@@ -330,6 +360,7 @@ func runBundleShellImmediate(paths []string) {
 	}
 
 	failures := make([]string, 0)
+	moved := 0
 	for _, entry := range entries {
 		target := filepath.Join(dest, filepath.Base(entry.Path))
 		if _, err := os.Stat(target); err == nil {
@@ -337,7 +368,13 @@ func runBundleShellImmediate(paths []string) {
 		}
 		if err := moveBundlePath(entry.Path, target); err != nil {
 			failures = append(failures, filepath.Base(entry.Path)+": "+err.Error())
+			continue
 		}
+		moved++
+	}
+	if moved == 0 {
+		// Do not leave an empty "새 폴더" behind when the source could not move.
+		_ = os.Remove(dest)
 	}
 	if len(failures) > 0 {
 		message := strings.Join(failures, "\n")
@@ -348,39 +385,73 @@ func runBundleShellImmediate(paths []string) {
 	}
 }
 
-// Explorer starts a classic context-menu command once per selected item on
-// some Windows versions. Each short-lived process writes its item to a queue;
-// the first process collects the burst and performs one move operation.
-func collectBundleShellInvocations(paths []string) []string {
+// Explorer may start a classic context-menu command once per selected item.
+// The first process becomes the leader; the other short-lived processes only
+// enqueue their absolute path. The leader collects the current burst once.
+func collectBundleShellInvocations(paths []string) ([]string, bool) {
+	paths = normalizeBundleShellPaths(paths)
+	if len(paths) == 0 {
+		return nil, true
+	}
+
 	cache, err := os.UserCacheDir()
 	if err != nil || cache == "" {
 		cache = os.TempDir()
 	}
 	queueDir := filepath.Join(cache, "JTSN", "bundle-shell-queue")
 	_ = os.MkdirAll(queueDir, 0755)
-	payload, _ := json.Marshal(paths)
-	requestPath := filepath.Join(queueDir, fmt.Sprintf("%d-%d.json", os.Getpid(), time.Now().UnixNano()))
-	_ = os.WriteFile(requestPath, payload, 0600)
 
-	mutex, _, mutexErr := procCreateMutexW.Call(0, 1, uintptr(unsafe.Pointer(p16("Local\\JTSN_Bundle_Shell_Batch_v1"))))
+	batchStarted := time.Now()
+	mutex, _, mutexErr := procCreateMutexW.Call(0, 1, uintptr(unsafe.Pointer(p16("Local\\JTSN_Bundle_Shell_Batch_v2"))))
 	if mutex != 0 {
 		defer procCloseHandleMain.Call(mutex)
 	}
-	if mutexErr == syscall.Errno(183) {
-		return nil
+	leader := mutexErr != syscall.Errno(183)
+
+	// The leader cleans only files that predate this burst. Followers are
+	// created after the mutex exists, so their fresh requests are preserved.
+	if leader {
+		files, _ := filepath.Glob(filepath.Join(queueDir, "*.json"))
+		for _, file := range files {
+			info, statErr := os.Stat(file)
+			if statErr != nil || info.ModTime().Before(batchStarted.Add(-500*time.Millisecond)) {
+				_ = os.Remove(file)
+			}
+		}
 	}
 
-	// Wait until Explorer's burst of per-item launches has gone quiet.
+	payload, _ := json.Marshal(paths)
+	requestPath := filepath.Join(queueDir, fmt.Sprintf("%d-%d.json", os.Getpid(), time.Now().UnixNano()))
+	if err := os.WriteFile(requestPath, payload, 0600); err != nil {
+		if leader {
+			return paths, true
+		}
+		return nil, false
+	}
+	if !leader {
+		return nil, false
+	}
+
+	// Wait until Explorer's burst of per-item launches has gone quiet. A single
+	// file therefore costs only a short debounce, while multi-select remains one
+	// operation and one destination folder.
 	lastCount := -1
 	stableRounds := 0
-	deadline := time.Now().Add(2500 * time.Millisecond)
+	deadline := time.Now().Add(1800 * time.Millisecond)
 	for time.Now().Before(deadline) && stableRounds < 3 {
-		time.Sleep(180 * time.Millisecond)
+		time.Sleep(140 * time.Millisecond)
 		files, _ := filepath.Glob(filepath.Join(queueDir, "*.json"))
-		if len(files) == lastCount {
+		current := 0
+		for _, file := range files {
+			info, statErr := os.Stat(file)
+			if statErr == nil && !info.ModTime().Before(batchStarted.Add(-500*time.Millisecond)) {
+				current++
+			}
+		}
+		if current == lastCount {
 			stableRounds++
 		} else {
-			lastCount = len(files)
+			lastCount = current
 			stableRounds = 0
 		}
 	}
@@ -392,7 +463,7 @@ func collectBundleShellInvocations(paths []string) []string {
 		if statErr != nil {
 			continue
 		}
-		if time.Since(info.ModTime()) > 15*time.Second {
+		if info.ModTime().Before(batchStarted.Add(-500 * time.Millisecond)) {
 			_ = os.Remove(file)
 			continue
 		}
@@ -405,7 +476,7 @@ func collectBundleShellInvocations(paths []string) []string {
 		}
 		_ = os.Remove(file)
 	}
-	return all
+	return normalizeBundleShellPaths(all), true
 }
 
 func runBundleMove() {
