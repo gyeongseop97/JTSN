@@ -49,20 +49,20 @@ func registerBundleExplorerMenu() {
 		errorBox("JTSN 실행 파일 경로를 확인할 수 없습니다.")
 		return
 	}
-	command := fmt.Sprintf("\\\"%s\\\" --bundle-shell \\\"%%1\\\"", target)
-	keys := []string{`HKCU\\Software\\Classes\\*\\shell\\JTSNBundle`, `HKCU\\Software\\Classes\\Directory\\shell\\JTSNBundle`}
+	command := fmt.Sprintf("\"%s\" --bundle-shell \"%%1\"", target)
+	keys := []string{`HKCU\Software\Classes\*\shell\JTSNBundle`, `HKCU\Software\Classes\Directory\shell\JTSNBundle`}
 	for _, key := range keys {
-		commands := [][]string{{"add", key, "/v", "MUIVerb", "/d", "JTSN 새 폴더에 넣기", "/f"}, {"add", key, "/v", "MultiSelectModel", "/d", "Player", "/f"}, {"add", key + `\\command`, "/ve", "/d", command, "/f"}}
+		commands := [][]string{{"add", key, "/v", "MUIVerb", "/d", "JTSN 새 폴더에 넣기", "/f"}, {"add", key, "/v", "MultiSelectModel", "/d", "Player", "/f"}, {"add", key + `\command`, "/ve", "/d", command, "/f"}}
 		for _, args := range commands {
 			cmd := exec.Command("reg.exe", args...)
 			cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 			if out, e := cmd.CombinedOutput(); e != nil {
-				errorBox("탐색기 메뉴 등록 실패: " + e.Error() + "\\n" + string(out))
+				errorBox("탐색기 메뉴 등록 실패: " + e.Error() + "\n" + string(out))
 				return
 			}
 		}
 	}
-	info("탐색기 우클릭 메뉴에 ‘JTSN 새 폴더에 넣기’를 등록했습니다.\\n\\n이제 버전이 업데이트되어도 고정 JTSN 런처를 통해 계속 동작합니다.\\nWindows 11에서는 ‘더 많은 옵션 표시’ 안에 나타날 수 있습니다.")
+	info("탐색기 우클릭 메뉴에 ‘JTSN 새 폴더에 넣기’를 등록했습니다.\n\n이제 버전이 업데이트되어도 고정 JTSN 런처를 통해 계속 동작합니다.\nWindows 11에서는 ‘더 많은 옵션 표시’ 안에 나타날 수 있습니다.")
 }
 '''
 bundle = replace_one(
@@ -81,8 +81,8 @@ installer = replace_one(installer, r'launcherVersion = "5\.77"', 'launcherVersio
 repair_func = r'''
 func repairBundleExplorerMenuIfRegistered() {
 	target := installedPath()
-	command := fmt.Sprintf("\\\"%s\\\" --bundle-shell \\\"%%1\\\"", target)
-	keys := []string{`HKCU\\Software\\Classes\\*\\shell\\JTSNBundle`, `HKCU\\Software\\Classes\\Directory\\shell\\JTSNBundle`}
+	command := fmt.Sprintf("\"%s\" --bundle-shell \"%%1\"", target)
+	keys := []string{`HKCU\Software\Classes\*\shell\JTSNBundle`, `HKCU\Software\Classes\Directory\shell\JTSNBundle`}
 	for _, key := range keys {
 		query := exec.Command("reg.exe", "query", key)
 		query.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
@@ -92,7 +92,7 @@ func repairBundleExplorerMenuIfRegistered() {
 		}
 		_ = runHidden("reg.exe", "add", key, "/v", "MUIVerb", "/d", "JTSN 새 폴더에 넣기", "/f")
 		_ = runHidden("reg.exe", "add", key, "/v", "MultiSelectModel", "/d", "Player", "/f")
-		_ = runHidden("reg.exe", "add", key+`\\command`, "/ve", "/d", command, "/f")
+		_ = runHidden("reg.exe", "add", key+`\command`, "/ve", "/d", command, "/f")
 	}
 }
 '''
