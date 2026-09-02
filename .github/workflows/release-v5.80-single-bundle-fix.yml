@@ -1,0 +1,101 @@
+name: Publish JTSN v5.80 Single Bundle Fix
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.release/release-v5.80.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+
+      - name: Patch v5.80 source
+        shell: pwsh
+        run: |
+          python scripts/patch_v580.py
+          gofmt -w app/main.go app/bundle.go installer/main.go
+
+      - name: Verify single and multi bundle shell logic
+        shell: pwsh
+        run: |
+          $bundle = Get-Content app/bundle.go -Raw
+          if ($bundle -notmatch 'func normalizeBundleShellPaths') { throw 'path normalizer missing' }
+          if ($bundle -notmatch 'collectBundleShellInvocations\(direct\)') { throw 'collector call missing' }
+          if ($bundle -notmatch 'return normalizeBundleShellPaths\(all\), true') { throw 'leader collection return missing' }
+          if ($bundle -notmatch 'JTSN_Bundle_Shell_Batch_v2') { throw 'new shell batch mutex missing' }
+          if ($bundle -notmatch 'if moved == 0') { throw 'empty destination cleanup missing' }
+
+      - name: Build application
+        shell: pwsh
+        working-directory: app
+        run: |
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_v5.80.exe .
+
+      - name: Prepare and build installer
+        shell: pwsh
+        run: |
+          $hash=(Get-FileHash app/JTSN_v5.80.exe -Algorithm SHA256).Hash.ToLower()
+          Get-ChildItem installer/core -Filter '*.exe' -ErrorAction SilentlyContinue | Remove-Item -Force
+          Copy-Item app/JTSN_v5.80.exe installer/core/JTSN_v5.80.exe -Force
+          $source = Get-Content installer/main.go -Raw
+          $source = [regex]::Replace($source, 'expectedCoreSHA = "[0-9a-f]*"', "expectedCoreSHA = `"$hash`"", 1)
+          Set-Content installer/main.go -Value $source -Encoding utf8
+          gofmt -w installer/main.go
+          Push-Location installer
+          go test -buildvcs=false ./...
+          go vet -buildvcs=false ./...
+          go build -buildvcs=false -trimpath -ldflags="-s -w -H windowsgui" -o JTSN_Setup_v5.80.exe .
+          Pop-Location
+          if ((Get-Item installer/JTSN_Setup_v5.80.exe).Length -lt 1000000) { throw 'installer binary unexpectedly small' }
+
+      - name: Persist v5.80 source to main
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/main.go app/bundle.go installer/main.go
+          if (-not (git diff --cached --quiet)) {
+            git commit -m 'Fix single-file Explorer bundle handling in v5.80'
+            git push origin HEAD:main
+          }
+
+      - name: Package release
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release-source/JTSN_v5.80_FULL_SOURCE | Out-Null
+          Copy-Item app,installer,.github,scripts release-source/JTSN_v5.80_FULL_SOURCE -Recurse
+          Copy-Item README.md,RELEASE_POLICY.md release-source/JTSN_v5.80_FULL_SOURCE
+          Get-ChildItem release-source/JTSN_v5.80_FULL_SOURCE -Filter '*.exe' -Recurse | Remove-Item -Force
+          Compress-Archive -Path release-source/JTSN_v5.80_FULL_SOURCE -DestinationPath JTSN_v5.80_FULL_SOURCE.zip
+          $installerHash=(Get-FileHash installer/JTSN_Setup_v5.80.exe -Algorithm SHA256).Hash.ToLower()
+          $sourceHash=(Get-FileHash JTSN_v5.80_FULL_SOURCE.zip -Algorithm SHA256).Hash.ToLower()
+          "$installerHash  JTSN_Setup_v5.80.exe" | Set-Content -Encoding ascii JTSN_Setup_v5.80.exe.sha256.txt
+          @("$installerHash  JTSN_Setup_v5.80.exe", "$sourceHash  JTSN_v5.80_FULL_SOURCE.zip") | Set-Content -Encoding ascii JTSN_v5.80_SHA256SUMS.txt
+          @(
+            '## v5.80 파일 1개 우클릭 새 폴더 오류 수정', '',
+            '- 파일 1개만 선택해 새 폴더에 넣을 때 발생하던 오류 수정',
+            '- 탐색기 우클릭 호출 수집을 리더/팔로워 방식으로 안정화',
+            '- 현재 실행보다 이전의 큐 항목이 섞이지 않도록 배치 범위 제한',
+            '- 이동 실패 시 빈 새 폴더가 남지 않도록 정리'
+          ) | Set-Content -Encoding utf8 RELEASE_NOTES.md
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v5.80 installer/JTSN_Setup_v5.80.exe JTSN_Setup_v5.80.exe.sha256.txt JTSN_v5.80_FULL_SOURCE.zip JTSN_v5.80_SHA256SUMS.txt --target main --title "JTSN v5.80 Single Bundle Fix" --notes-file RELEASE_NOTES.md --latest
