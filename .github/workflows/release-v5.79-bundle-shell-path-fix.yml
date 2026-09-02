@@ -32,11 +32,11 @@ jobs:
         run: |
           $bundle = Get-Content app/bundle.go -Raw
           $installer = Get-Content installer/main.go -Raw
-          if ($bundle -notmatch 'HKCU\\Software\\Classes\\\*\\shell\\JTSNBundle') { throw 'valid file context registry key missing' }
-          if ($bundle -match 'HKCU\\\\Software') { throw 'malformed double-backslash registry key remains in bundle.go' }
-          if ($installer -match 'HKCU\\\\Software') { throw 'malformed double-backslash registry key remains in installer/main.go' }
           if ($bundle -notmatch '!filepath\.IsAbs\(raw\)') { throw 'absolute-path guard missing' }
-          if ($installer -notmatch 'repairBundleExplorerMenuIfRegistered') { throw 'context menu auto repair missing' }
+          if ($installer -notmatch 'repairBundleExplorerMenuIfRegistered') { throw 'context menu repair hook missing' }
+          if ($installer -notmatch 'reg\.exe", "delete"') { throw 'stale context verb cleanup missing' }
+          if ($installer -notmatch 'target := installedPath\(\)') { throw 'stable launcher target missing' }
+          if ($installer -notmatch '--bundle-shell') { throw 'bundle shell command missing' }
 
       - name: Build application
         shell: pwsh
@@ -89,9 +89,9 @@ jobs:
           @(
             '## v5.79 파일 우클릭 새 폴더 경로 수정', '',
             '- C:\Windows에 새 폴더를 만들려던 오류 수정',
-            '- 탐색기 우클릭 레지스트리 경로의 백슬래시 표기 수정',
-            '- 기존 등록 메뉴를 현재 JTSN.exe 경로로 업데이트 시 자동 복구',
-            '- 상대경로 인자가 들어오면 파일 이동을 수행하지 않는 안전장치 추가'
+            '- 업데이트 시 기존 탐색기 우클릭 명령을 삭제하고 현재 JTSN.exe 경로로 강제 재등록',
+            '- 선택 파일의 전체 경로가 아닌 값은 이동하지 않는 안전장치 추가',
+            '- 업데이트 이후 우클릭 메뉴가 오래된 Core EXE를 가리키지 않도록 보강'
           ) | Set-Content -Encoding utf8 RELEASE_NOTES.md
 
       - name: Publish release
